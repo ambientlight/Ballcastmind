@@ -16,7 +16,7 @@ from src.threadsafe_generator import threadsafe_generator
 from models.conv_simple_with_single_on_top import ConvSimpleWithSingleOnTopModel
 
 simple_conv = ConvSimpleWithSingleOnTopModel(name='Conv_simple_with_single_on_top_0')
-simple_conv.resume_if_needed()
+simple_conv.train_validate()
 #simple_conv.train_validate()
 
 # data_directory_path = '../data'

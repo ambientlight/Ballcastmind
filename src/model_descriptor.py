@@ -10,7 +10,7 @@ import re
 import math
 
 from keras.models import Model, load_model
-#from hyperas import optim
+from hyperas import optim
 from hyperopt import tpe
 
 from src.model_descriptor_state import ModelDescriptorStateType, ModelDescriptorTrainingDevState, model_descriptor_state_from_file
@@ -193,6 +193,9 @@ class ModelDescriptor:
             steps_per_epoch = batches
             validation_steps = val_batches
 
+            print(f'Total training entries: {train_entries_total}, used: {train_entries_len}')
+            print(f'Total validating entries: {val_entries_total}, used: {val_entries_len}')
+
         elif self._gradientVariant == GradientDescentVariant.batch:
             steps_per_epoch = 1
             validation_steps = 1
@@ -230,12 +233,18 @@ class ModelDescriptor:
             remove(state_path)
         self.state = state
 
-    def train_validate(self, epoch: int = 10, build: int = 0):
+    def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False):
         # search if dev model exists for this version
-        latest_dev_model_res = self.latest_dev_model()
+        if not from_scratch:
+            latest_dev_model_res = self.latest_dev_model() if not build else self.load_model(stage='dev',
+                                                                                             build=build,
+                                                                                             version=self._version)
+        else:
+            latest_dev_model_res = None
+
         if not latest_dev_model_res:
             model = self.create_model(for_optimization=False)
-            model_state = TrainingStateRegular(version=self._version, build=build)
+            model_state = TrainingStateRegular(version=self._version, build=build if build else 0)
             history_dict = {}
         else:
             model, model_state, history_dict = latest_dev_model_res
