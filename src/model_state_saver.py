@@ -24,11 +24,7 @@ class ModelStateSaver(Callback):
         self.training_state = training_state
         self.model_folder = model_folder
 
-    def on_epoch_end(self, epoch, logs=None):
-        self.training_state.trained_epochs += 1
-        for k, v in logs.items():
-            self.history.setdefault(k, []).append(v)
-
+    def _save_training_state(self):
         model_path = f'{self.model_folder}/model.h5'
         training_state_path = f'{self.model_folder}/state.json'
         history_path = f'{self.model_folder}/history.json'
@@ -40,6 +36,16 @@ class ModelStateSaver(Callback):
         with open(history_path, 'w') as json_file:
             print(json.dumps(self.history), file=json_file)
         self.training_state.save_to_file(training_state_path)
+
+    def on_train_begin(self, logs=None):
+        self._save_training_state()
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.training_state.trained_epochs += 1
+        for k, v in logs.items():
+            self.history.setdefault(k, []).append(v)
+        self._save_training_state()
+
 
 
 
