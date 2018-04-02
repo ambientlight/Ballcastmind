@@ -1,4 +1,4 @@
-from typing import Sequence, Any, Generator
+from typing import Sequence, Any, Generator, Optional, Dict
 from os.path import isfile
 from types import SimpleNamespace as Namespace
 import numpy
@@ -7,6 +7,7 @@ import json
 from keras.models import Model
 from keras.preprocessing.image import load_img, img_to_array
 from keras import Input, layers
+from hyperopt import hp
 
 from src.model_descriptor import ModelDescriptor
 from src.threadsafe_generator import threadsafe_generator
@@ -24,20 +25,25 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
     def __init__(self, name: str):
         super().__init__(name)
 
-    def create_model(self, for_optimization: bool) -> Model:
+    def create_model(self, space: Optional[Dict[str, Any]] = None) -> Model:
+        print('Hyperopt space')
+        print(space)
+
+        for_optimization = True if space else False
+
         img_input = Input(shape=(640, 400, 3), dtype='float32')
-        x = layers.Conv2D(32, (3, 3), activation='relu')(img_input)
-        x = layers.MaxPooling2D((2, 2))(x)
-        x = layers.Conv2D(64, (3, 3), activation='relu')(x)
-        x = layers.MaxPooling2D((2, 2))(x)
-        x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-        x = layers.MaxPooling2D((2, 2))(x)
-        x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-        x = layers.MaxPooling2D((2, 2))(x)
-        x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-        x = layers.MaxPooling2D((2, 2))(x)
-        x = layers.Conv2D(128, (3, 3), activation='relu')(x)
-        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Conv2D(32 if not for_optimization else space['Conv2D_0'], 3, activation='relu')(img_input)
+        x = layers.MaxPooling2D(2)(x)
+        x = layers.Conv2D(64 if not for_optimization else space['Conv2D_1'], 3, activation='relu')(x)
+        x = layers.MaxPooling2D(2)(x)
+        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_2'], 3, activation='relu')(x)
+        x = layers.MaxPooling2D(2)(x)
+        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_3'], 3, activation='relu')(x)
+        x = layers.MaxPooling2D(2)(x)
+        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_4'], 3, activation='relu')(x)
+        x = layers.MaxPooling2D(2)(x)
+        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_5'], 3, activation='relu')(x)
+        x = layers.MaxPooling2D(2)(x)
         x = layers.Flatten()(x)
         x = layers.Dense(512, activation='relu')(x)
         pos_x_pred = layers.Dense(1, name='pos_x')(x)
@@ -59,6 +65,14 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
                             'fov': 'mse'},
                       metrics=['mae'])
         return model
+
+    def hyperopt_space(self):
+        space = {}
+        for i in range(6):
+            key = f'Conv2D_{i}'
+            space[key] = hp.choice(key, [32, 64, 128])
+
+        return space
 
     def data_locators(self):
         frame_data_path = f'{sample_dir}/frame_data.json'

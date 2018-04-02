@@ -1,6 +1,6 @@
 from collections import namedtuple
 from enum import Enum
-from typing import ClassVar, Union, Optional, Callable, Any, Sequence, Generator, Dict, Tuple
+from typing import ClassVar, Optional, Any, Sequence, Generator, Dict, Tuple
 from abc import abstractmethod
 from os import listdir, remove
 from os.path import isdir, isfile
@@ -8,13 +8,15 @@ from warnings import warn
 import json
 import re
 import math
+import pickle
 
 from keras.models import Model, load_model
-from hyperas import optim
-from hyperopt import tpe
+from hyperopt import tpe, Trials, STATUS_OK, fmin
 
-from src.model_descriptor_state import ModelDescriptorStateType, ModelDescriptorTrainingDevState, model_descriptor_state_from_file
-from src.model_training_state import TrainingStateRegular, TrainingStateKFold, training_state_from_file
+from src.model_descriptor_state import ModelDescriptorStateType, ModelDescriptorState, \
+    ModelDescriptorTrainingDevState, ModelDescriptorOptimizingState, ModelDescriptorKFoldValidatingState, \
+    model_descriptor_state_from_file
+from src.model_training_state import TrainingState
 from src.model_state_saver import ModelStateSaver
 
 
@@ -43,10 +45,19 @@ class ModelDescriptor:
     _miniBatchSize: ClassVar[Optional[int]] = 64
 
     name: str
-    state: Union[ModelDescriptorTrainingDevState, None]
+    state: ModelDescriptorState
+
+    # used internally by resume_if_needed and optimization's object
+    _restored_model_info: Optional[Tuple[Model, TrainingState, Dict[str, Any]]]
 
     @property
     def data_path(self) -> str: return f'{_model_dir_path}/{self.name}'
+
+    @property
+    def descriptor_path(self) -> str: return f'{self.data_path}/descriptor.json'
+
+    @property
+    def trials_path(self) -> str: return f'{self.data_path}/trials.p'
 
     @property
     def is_idle(self) -> bool: return not self.state
@@ -54,9 +65,14 @@ class ModelDescriptor:
     '''
         should return already compiled model
     '''
+
     @abstractmethod
-    def create_model(self, for_optimization: bool) -> Model:
-        raise NotImplemented
+    def create_model(self, space: Optional[Dict[str, Any]] = None) -> Model:
+        return NotImplemented
+
+    @abstractmethod
+    def hyperopt_space(self) -> Dict[str, Any]:
+        return NotImplemented
 
     @abstractmethod
     def data_locators(self) -> Sequence[Any]:
@@ -81,6 +97,7 @@ class ModelDescriptor:
             return
 
         self.state = model_descriptor_state_from_file(descriptor_path)
+        self._restored_model_info = None
 
     '''
     descriptor.json
@@ -104,11 +121,7 @@ class ModelDescriptor:
         return r'^(\d+)\.v(\d+)$'
 
     def load_model(self, stage: str, build: int, version: int) -> Optional[
-        Tuple[
-            Model,
-            Union[TrainingStateRegular, TrainingStateKFold],
-            Dict[str, Any]
-        ]
+        Tuple[Model, TrainingState, Dict[str, Any]]
     ]:
         directory_path = f'{self.data_path}/{stage}'
         if not isdir(directory_path):
@@ -131,23 +144,16 @@ class ModelDescriptor:
             warn(f'Model history is not available at {history_path}, while expected')
             return None
 
-        training_state = training_state_from_file(training_state_path,
-                                                  version=version,
-                                                  build=build)
+        training_state = TrainingState.from_file(training_state_path,
+                                                 version=version,
+                                                 build=build)
 
         with open(history_path, encoding='utf-8') as history_file:
             history_dict = json.load(history_file)
 
         return load_model(model_path), training_state, history_dict
 
-    def latest_dev_model(self) -> Optional[
-        Tuple[
-            Model,
-            Union[TrainingStateRegular, TrainingStateKFold],
-            Dict[str, Any]
-        ]
-    ]:
-
+    def latest_build(self) -> Optional[int]:
         dev_directory_path = f'{self.data_path}/dev'
         if not isdir(dev_directory_path):
             return None
@@ -165,10 +171,17 @@ class ModelDescriptor:
         if len(dev_build_versions_matching_version) == 0:
             return None
 
-        latest_build_version = dev_build_versions_matching_version[-1]
-        return self.load_model(stage='dev', build=latest_build_version.build, version=latest_build_version.version)
+        return dev_build_versions_matching_version[-1].build
 
-    def _train_dev_regular(self, model: Model, model_state: TrainingStateRegular, history_dict: Dict[str, Any]):
+    def latest_dev_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, Any]]]:
+
+        latest_build = self.latest_build()
+        if not latest_build:
+            return None
+
+        return self.load_model(stage='dev', build=latest_build, version=self._version)
+
+    def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
 
         model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
         model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict, model_folder=model_dir)
@@ -212,9 +225,7 @@ class ModelDescriptor:
             val_generator = self.data_generator(data_entries[train_entries_total:],
                                                 batch_size=1)
 
-        self._update_state(ModelDescriptorTrainingDevState(model_state.build))
-
-        model.fit_generator(
+        history = model.fit_generator(
             generator=train_generator,
             steps_per_epoch=steps_per_epoch,
             epochs=model_state.training_target_epochs - model_state.trained_epochs,
@@ -222,15 +233,14 @@ class ModelDescriptor:
             validation_steps=validation_steps,
             callbacks=[model_state_saver]
         )
+        return history.history['val_loss'][-1]
 
-        self._update_state(None)
-
-    def _update_state(self, state: Union[ModelDescriptorTrainingDevState, None]):
-        state_path = f'{self.data_path}/descriptor.json'
+    def _update_state(self, state: ModelDescriptorState):
         if state:
-            state.save_to_file(state_path)
-        elif isfile(state_path):
-            remove(state_path)
+            state.save_to_file(self.descriptor_path)
+        elif isfile(self.descriptor_path):
+            remove(self.descriptor_path)
+
         self.state = state
 
     def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False):
@@ -242,27 +252,112 @@ class ModelDescriptor:
         else:
             latest_dev_model_res = None
 
+        # we are passing training code as a function to create_model to have consistency with optimization code
+        # where create_model function(templated) needs to be passed to hyperas
         if not latest_dev_model_res:
-            model = self.create_model(for_optimization=False)
-            model_state = TrainingStateRegular(version=self._version, build=build if build else 0)
+            model = self.create_model()
+            model_state = TrainingState(version=self._version, build=build if build else 0)
+            model_state.training_target_epochs += epoch
             history_dict = {}
         else:
             model, model_state, history_dict = latest_dev_model_res
 
         model_state.training_target_epochs += epoch
-        self._train_dev_regular(model, model_state, history_dict)
+        self._update_state(ModelDescriptorTrainingDevState(model_state.build))
+        self._train_dev_core(model, model_state, history_dict)
+        self._update_state(None)
 
     # should return best_run data
-    def optimize(self, max_evals: int, search_algo: Callable = tpe.suggest) -> Optional[Dict[str, Any]]:
-        pass
+    def optimize(self,
+                 max_evals: Optional[int] = None,
+                 epoch: Optional[int] = None,
+                 build: Optional[int] = None) -> Any:
 
-    def kfold_validate(self, folds: int = 4):
-        pass
+        target_build = build if build else self.latest_build() if self.latest_build() else 0
+        # if _intermediate_optimization_model_info was set and we are in optimizing state
+        # we are resuming optimization, load trials for this evaluation
+        if (self.state
+                and self.state.type == ModelDescriptorStateType.optimizing
+                and hasattr(self, '_intermediate_optimization_model_info')
+                and self._restored_model_info
+                and isfile(self.trials_path)):
+
+            trials = pickle.load(open(self.trials_path, 'rb'))
+            completed_evals = self.state.completed_evals
+            target_evals = self.state.target_evals
+        else:
+            trials = Trials()
+            # to make sure we don't hit warning on resume before first epoch completes
+            pickle.dump(trials, open(self.trials_path, 'wb'))
+            completed_evals = 0
+            target_evals = max_evals if max_evals else 10
+
+            self._update_state(
+                ModelDescriptorOptimizingState(build=target_build, completed_evals=0, target_evals=max_evals)
+            )
+
+        def objective(space: Dict[str, Any]) -> Dict[str, Any]:
+            nonlocal epoch
+
+            if (self.state
+                    and self.state.type == ModelDescriptorStateType.optimizing
+                    and hasattr(self, '_intermediate_optimization_model_info')
+                    and self._restored_model_info
+                    and isfile(self.trials_path)):
+
+                model, model_state, history_dict = self._restored_model_info
+                self._restored_model_info = None
+                # model_state target_epoch should be used for all subsequent trainings
+                epoch = model_state.training_target_epochs
+
+                print(f'Eval: {self.state.completed_evals + 1}, using restored model')
+            else:
+                model = self.create_model(space)
+                model_state = TrainingState(version=self._version, build=target_build)
+                model_state.training_target_epochs += epoch if epoch else 10
+                print(f'Eval: {self.state.completed_evals + 1}, using fresh model')
+
+            validation_loss = self._train_dev_core(model, model_state, {})
+            self.state.completed_evals += 1
+            self.state.save_to_file(self.descriptor_path)
+            return {'loss': validation_loss, 'status': STATUS_OK}
+
+        best_run = None
+        for i in range(completed_evals, target_evals):
+            best_run = fmin(objective,
+                            space=self.hyperopt_space(),
+                            algo=tpe.suggest,
+                            max_evals=i + 1,
+                            trials=Trials(),
+                            verbose=1)
+            pickle.dump(trials, open(self.trials_path, 'wb'))
+
+        self._update_state(None)
+        return best_run
+
+    def kfold_validate(self, folds: Optional[int] = None, epoch: Optional[int] = None, build: Optional[int] = None):
+        target_build = build if build else self.latest_build() if self.latest_build() else 0
+        if(self.state
+                and self.state.type == ModelDescriptorStateType.kFoldValidating
+                and hasattr(self, '_intermediate_optimization_model_info')
+                and self._restored_model_info):
+            current_fold = self.state.completed_folds
+            target_folds = self.state.folds
+        else:
+            current_fold = 0
+            target_folds = folds
+
+            self._update_state(
+                ModelDescriptorKFoldValidatingState(build=target_build, folds=folds, completed_folds=0)
+            )
+
+        for i in range(current_fold, target_folds):
+            pass
 
     def train_prod(self, epoch: Optional[int] = None, build: Optional[int] = None):
         pass
 
-    def resume_if_needed(self):
+    def resume_if_needed(self) -> Any:
         if self.state.type == ModelDescriptorStateType.trainingDev:
             loaded_model_res = self.load_model(stage='dev', build=self.state.build, version=self._version)
             if not loaded_model_res:
@@ -270,10 +365,27 @@ class ModelDescriptor:
                      f"but build:{self.state.build}, version:{self._version} dev-model is not available."
                      f"Version might have changed or model files were moved/deleted")
                 self._update_state(None)
+                return
 
             model, model_state, history_dict = loaded_model_res
-            self._train_dev_regular(model, model_state, history_dict)
+            self._train_dev_core(model, model_state, history_dict)
+            self._update_state(None)
+        elif self.state.type == ModelDescriptorStateType.optimizing:
+            loaded_model_res = self.load_model(stage='dev', build=self.state.build, version=self._version)
+            if not loaded_model_res:
+                warn(f"Couldn't resume training. Optimizing was set, "
+                     f"but build:{self.state.build}, version:{self._version} dev-model is not available."
+                     f"Version might have changed or model files were moved/deleted")
+                self._update_state(None)
+                return
 
+            if not isfile(self.trials_path):
+                warn(f"Couldn't resume training. Optimizing was set, "
+                     f"but trials file not found")
+                self._update_state(None)
+                return
+
+            self._restored_model_info = loaded_model_res
+            return self.optimize()
         else:
             print('No task to resume')
-

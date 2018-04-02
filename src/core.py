@@ -16,10 +16,16 @@ from src.threadsafe_generator import threadsafe_generator
 from models.conv_simple_with_single_on_top import ConvSimpleWithSingleOnTopModel
 
 simple_conv = ConvSimpleWithSingleOnTopModel(name='Conv_simple_with_single_on_top_0')
-simple_conv.train_validate()
-#simple_conv.train_validate()
+if not simple_conv.is_idle:
+    result = simple_conv.resume_if_needed()
+    print('Optimization result')
+    print(result)
 
-# data_directory_path = '../data'
+# best_run = simple_conv.optimize(epoch=2, max_evals=2)
+# print('Optimization result')
+# print(best_run)
+
+# data_directory_path = '../daRta'
 # sample_name = '10_min_sample'
 # sample_id = 'cebd5588-926b-486b-8add-bbe1e74a1226'
 #
