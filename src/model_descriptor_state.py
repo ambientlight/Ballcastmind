@@ -1,4 +1,4 @@
-from typing import ClassVar, Union
+from typing import ClassVar, Union, List
 from abc import abstractmethod
 from enum import Enum
 from os.path import isfile
@@ -63,12 +63,14 @@ class ModelDescriptorKFoldValidatingState(ModelDescriptorStateBase):
     type: ClassVar[ModelDescriptorStateBase] = ModelDescriptorStateType.kFoldValidating
     build: int
     completed_folds: int
+    intermediate_validation_scores: List[float]
     folds: int
 
-    def __init__(self, build: int, completed_folds: int, folds: int):
+    def __init__(self, build: int, completed_folds: int, folds: int, intermediate_validation_scores: List[float]):
         self.build = build
         self.completed_folds = completed_folds
         self.folds = folds
+        self.intermediate_validation_scores = intermediate_validation_scores
 
     def save_to_file(self, file_path: str):
         with open(file_path, 'w') as json_file:
@@ -76,7 +78,8 @@ class ModelDescriptorKFoldValidatingState(ModelDescriptorStateBase):
                 'type': self.type.value,
                 'build': self.build,
                 'completed_folds': self.completed_folds,
-                'folds': self.folds
+                'folds': self.folds,
+                'intermediate_validation_scores': self.intermediate_validation_scores
             }), file=json_file)
 
 
@@ -104,8 +107,9 @@ def model_descriptor_state_from_file(file_path: str) -> ModelDescriptorState:
         elif descriptor_state_dict['type'] == ModelDescriptorStateType.kFoldValidating.value:
             return ModelDescriptorKFoldValidatingState(build=int(descriptor_state_dict['build']),
                                                        completed_folds=int(descriptor_state_dict['completed_folds']),
-                                                       folds=int(descriptor_state_dict['folds']))
+                                                       folds=int(descriptor_state_dict['folds']),
+                                                       intermediate_validation_scores=[float(validation_score)
+                                                                                       for validation_score in
+                                                                                       descriptor_state_dict['intermediate_validation_scores']])
         else:
             return None
-
-

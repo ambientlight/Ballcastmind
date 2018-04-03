@@ -1,6 +1,6 @@
 from collections import namedtuple
 from enum import Enum
-from typing import ClassVar, Optional, Any, Sequence, Generator, Dict, Tuple
+from typing import ClassVar, Optional, Any, Sequence, Generator, Dict, Tuple, List
 from abc import abstractmethod
 from os import listdir, remove
 from os.path import isdir, isfile
@@ -9,6 +9,7 @@ import json
 import re
 import math
 import pickle
+import numpy
 
 from keras.models import Model, load_model
 from hyperopt import tpe, Trials, STATUS_OK, fmin
@@ -181,6 +182,77 @@ class ModelDescriptor:
 
         return self.load_model(stage='dev', build=latest_build, version=self._version)
 
+    def _kfold_core(self, current_fold: int, folds: int, intermediate_val_scores: List[float], model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
+
+        if folds < 2:
+            raise Exception(f'Fold size({folds}) should be at least 2')
+        if self._gradientVariant == GradientDescentVariant.miniBatch and self._miniBatchSize % folds != 0:
+            raise Exception(f'Mini batch size({self._miniBatchSize}) should be devisible by number of folds({folds}).')
+
+        model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
+        data_entries = self.data_locators()
+        data_entries_len = len(data_entries)
+
+        if self._gradientVariant == GradientDescentVariant.miniBatch:
+            batches = int(math.floor(data_entries_len / self._miniBatchSize))
+            # clip the data so that the length is a multiple of batch size
+            clipped_data_entries_len = batches * self._miniBatchSize
+            fold_size = clipped_data_entries_len / folds
+            if fold_size < self._miniBatchSize:
+                raise Exception(f'Fold size({fold_size}) should not be smaller then batch size({self._miniBatchSize})')
+
+            entries_len = clipped_data_entries_len
+            val_batch_size = train_batch_size = self._miniBatchSize
+            # fold_size / mini-batch size
+            val_steps_per_epoch = int(int(entries_len / folds) / self._miniBatchSize)
+            # all-except-single-fold / mini-batch size
+            train_steps_per_epoch = int(int(math.floor(((folds - 1) / folds) * entries_len)) / self._miniBatchSize)
+
+        elif self._gradientVariant == GradientDescentVariant.batch:
+            # clip the data so that the length is a multiple of folds
+            entries_len = int(math.floor(data_entries_len / folds)) * folds
+            # fold size
+            val_batch_size = int(entries_len / folds)
+            # all-except-single-fold
+            train_batch_size = int(math.floor(((folds - 1) / folds) * entries_len))
+            val_steps_per_epoch = train_steps_per_epoch = 1
+
+        else:
+            # clip the data so that the length is a multiple of folds
+            entries_len = int(math.floor(data_entries_len / folds)) * folds
+            val_batch_size = train_batch_size = 1
+            val_steps_per_epoch = int(entries_len / folds)
+            train_steps_per_epoch = int(math.floor(((folds - 1) / folds) * entries_len))
+
+        fold_size = int(entries_len / folds)
+        validation_scores: List[float] = intermediate_val_scores[:]
+        for fold in range(current_fold, folds):
+            model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict,
+                                                model_folder=model_dir)
+
+            val_generator = self.data_generator(
+                data_entries[fold * fold_size: (fold + 1) * fold_size],
+                val_batch_size)
+            train_generator = self.data_generator(
+                data_entries[:fold * fold_size] + data_entries[(fold + 1) * fold_size:],
+                train_batch_size
+            )
+
+            history = model.fit_generator(
+                generator=train_generator,
+                steps_per_epoch=train_steps_per_epoch,
+                epochs=model_state.training_target_epochs - model_state.trained_epochs,
+                validation_data=val_generator,
+                validation_steps=val_steps_per_epoch,
+                callbacks=[model_state_saver]
+            )
+            validation_scores.append(history.history['val_loss'][-1])
+            self.state.intermediate_validation_scores = validation_scores[:]
+            self.state.completed_folds += 1
+            self._update_state(self.state)
+
+        return numpy.average(validation_scores)
+
     def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
 
         model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
@@ -243,7 +315,9 @@ class ModelDescriptor:
 
         self.state = state
 
-    def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False):
+    def _dev_model_or_fresh_added_epoch(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False)\
+            -> Tuple[Model, TrainingState, Dict[str, Any]]:
+
         # search if dev model exists for this version
         if not from_scratch:
             latest_dev_model_res = self.latest_dev_model() if not build else self.load_model(stage='dev',
@@ -252,20 +326,33 @@ class ModelDescriptor:
         else:
             latest_dev_model_res = None
 
-        # we are passing training code as a function to create_model to have consistency with optimization code
-        # where create_model function(templated) needs to be passed to hyperas
         if not latest_dev_model_res:
             model = self.create_model()
             model_state = TrainingState(version=self._version, build=build if build else 0)
-            model_state.training_target_epochs += epoch
             history_dict = {}
         else:
             model, model_state, history_dict = latest_dev_model_res
 
         model_state.training_target_epochs += epoch
+        return model, model_state, history_dict
+
+    def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False):
+        model, model_state, history_dict = self._dev_model_or_fresh_added_epoch(epoch, build, from_scratch)
         self._update_state(ModelDescriptorTrainingDevState(model_state.build))
         self._train_dev_core(model, model_state, history_dict)
         self._update_state(None)
+
+    def kfold_validate(self, folds: int, epoch: int, build: Optional[int] = None, from_scratch: bool = False) -> float:
+        model, model_state, history_dict = self._dev_model_or_fresh_added_epoch(epoch, build, from_scratch)
+        self._update_state(ModelDescriptorKFoldValidatingState(build=model_state.build, folds=folds, completed_folds=0))
+        validation_score = self._kfold_core(current_fold=0,
+                                            folds=folds,
+                                            intermediate_val_scores=[],
+                                            model=model,
+                                            model_state=model_state,
+                                            history_dict=history_dict)
+        self._update_state(None)
+        return validation_score
 
     # should return best_run data
     def optimize(self,
@@ -274,11 +361,11 @@ class ModelDescriptor:
                  build: Optional[int] = None) -> Any:
 
         target_build = build if build else self.latest_build() if self.latest_build() else 0
-        # if _intermediate_optimization_model_info was set and we are in optimizing state
+        # if _restored_model_info was set and we are in optimizing state
         # we are resuming optimization, load trials for this evaluation
         if (self.state
                 and self.state.type == ModelDescriptorStateType.optimizing
-                and hasattr(self, '_intermediate_optimization_model_info')
+                and hasattr(self, '_restored_model_info')
                 and self._restored_model_info
                 and isfile(self.trials_path)):
 
@@ -301,7 +388,7 @@ class ModelDescriptor:
 
             if (self.state
                     and self.state.type == ModelDescriptorStateType.optimizing
-                    and hasattr(self, '_intermediate_optimization_model_info')
+                    and hasattr(self, '_restored_model_info')
                     and self._restored_model_info
                     and isfile(self.trials_path)):
 
@@ -334,25 +421,6 @@ class ModelDescriptor:
 
         self._update_state(None)
         return best_run
-
-    def kfold_validate(self, folds: Optional[int] = None, epoch: Optional[int] = None, build: Optional[int] = None):
-        target_build = build if build else self.latest_build() if self.latest_build() else 0
-        if(self.state
-                and self.state.type == ModelDescriptorStateType.kFoldValidating
-                and hasattr(self, '_intermediate_optimization_model_info')
-                and self._restored_model_info):
-            current_fold = self.state.completed_folds
-            target_folds = self.state.folds
-        else:
-            current_fold = 0
-            target_folds = folds
-
-            self._update_state(
-                ModelDescriptorKFoldValidatingState(build=target_build, folds=folds, completed_folds=0)
-            )
-
-        for i in range(current_fold, target_folds):
-            pass
 
     def train_prod(self, epoch: Optional[int] = None, build: Optional[int] = None):
         pass
