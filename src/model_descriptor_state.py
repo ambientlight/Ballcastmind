@@ -83,10 +83,26 @@ class ModelDescriptorKFoldValidatingState(ModelDescriptorStateBase):
             }), file=json_file)
 
 
+class ModelDescriptorTrainingProdState(ModelDescriptorStateBase):
+    type: ClassVar[ModelDescriptorStateType] = ModelDescriptorStateType.trainingProd
+    build: int
+
+    def __init__(self, build: int):
+        self.build = build
+
+    def save_to_file(self, file_path: str):
+        with open(file_path, 'w') as json_file:
+            print(json.dumps({
+                'type': self.type.value,
+                'build': self.build
+            }), file=json_file)
+
+
 ModelDescriptorState = Union[
     ModelDescriptorTrainingDevState,
     ModelDescriptorOptimizingState,
     ModelDescriptorKFoldValidatingState,
+    ModelDescriptorTrainingProdState,
     None
 ]
 
@@ -105,11 +121,13 @@ def model_descriptor_state_from_file(file_path: str) -> ModelDescriptorState:
                                                   completed_evals=int(descriptor_state_dict['completed_evals']),
                                                   target_evals=int(descriptor_state_dict['target_evals']))
         elif descriptor_state_dict['type'] == ModelDescriptorStateType.kFoldValidating.value:
-            return ModelDescriptorKFoldValidatingState(build=int(descriptor_state_dict['build']),
-                                                       completed_folds=int(descriptor_state_dict['completed_folds']),
-                                                       folds=int(descriptor_state_dict['folds']),
-                                                       intermediate_validation_scores=[float(validation_score)
-                                                                                       for validation_score in
-                                                                                       descriptor_state_dict['intermediate_validation_scores']])
+            return ModelDescriptorKFoldValidatingState(
+                build=int(descriptor_state_dict['build']),
+                completed_folds=int(descriptor_state_dict['completed_folds']),
+                folds=int(descriptor_state_dict['folds']),
+                intermediate_validation_scores=[float(validation_score) for validation_score in
+                                                descriptor_state_dict['intermediate_validation_scores']])
+        elif descriptor_state_dict['type'] == ModelDescriptorStateType.trainingProd.value:
+            return ModelDescriptorTrainingProdState(build=int(descriptor_state_dict['build']))
         else:
             return None

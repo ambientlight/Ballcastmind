@@ -16,7 +16,7 @@ from hyperopt import tpe, Trials, STATUS_OK, fmin
 
 from src.model_descriptor_state import ModelDescriptorStateType, ModelDescriptorState, \
     ModelDescriptorTrainingDevState, ModelDescriptorOptimizingState, ModelDescriptorKFoldValidatingState, \
-    model_descriptor_state_from_file
+    ModelDescriptorTrainingProdState, model_descriptor_state_from_file
 from src.model_training_state import TrainingState
 from src.model_state_saver import ModelStateSaver
 
@@ -76,7 +76,7 @@ class ModelDescriptor:
         return NotImplemented
 
     @abstractmethod
-    def data_locators(self) -> Sequence[Any]:
+    def data_locators(self) -> List[Any]:
         raise NotImplemented
 
     @abstractmethod
@@ -154,14 +154,14 @@ class ModelDescriptor:
 
         return load_model(model_path), training_state, history_dict
 
-    def latest_build(self) -> Optional[int]:
-        dev_directory_path = f'{self.data_path}/dev'
-        if not isdir(dev_directory_path):
+    def latest_build(self, stage: str) -> Optional[int]:
+        stage_directory_path = f'{self.data_path}/{stage}'
+        if not isdir(stage_directory_path):
             return None
 
         dev_subdirs_matches = [re.search(self._model_dir_pattern, dir_name) for dir_name
-                               in listdir(dev_directory_path)
-                               if isdir(f'{dev_directory_path}/{dir_name}')
+                               in listdir(stage_directory_path)
+                               if isdir(f'{stage_directory_path}/{dir_name}')
                                and re.search(self._model_dir_pattern, dir_name)]
         dev_build_version_tuples = [BuildAndVersion(int(match[1]), int(match[2])) for match in dev_subdirs_matches]
         dev_build_versions_matching_version = sorted((build_version for build_version
@@ -176,82 +176,11 @@ class ModelDescriptor:
 
     def latest_dev_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, Any]]]:
 
-        latest_build = self.latest_build()
+        latest_build = self.latest_build(stage='dev')
         if not latest_build:
             return None
 
         return self.load_model(stage='dev', build=latest_build, version=self._version)
-
-    def _kfold_core(self, current_fold: int, folds: int, intermediate_val_scores: List[float], model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
-
-        if folds < 2:
-            raise Exception(f'Fold size({folds}) should be at least 2')
-        if self._gradientVariant == GradientDescentVariant.miniBatch and self._miniBatchSize % folds != 0:
-            raise Exception(f'Mini batch size({self._miniBatchSize}) should be devisible by number of folds({folds}).')
-
-        model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
-        data_entries = self.data_locators()
-        data_entries_len = len(data_entries)
-
-        if self._gradientVariant == GradientDescentVariant.miniBatch:
-            batches = int(math.floor(data_entries_len / self._miniBatchSize))
-            # clip the data so that the length is a multiple of batch size
-            clipped_data_entries_len = batches * self._miniBatchSize
-            fold_size = clipped_data_entries_len / folds
-            if fold_size < self._miniBatchSize:
-                raise Exception(f'Fold size({fold_size}) should not be smaller then batch size({self._miniBatchSize})')
-
-            entries_len = clipped_data_entries_len
-            val_batch_size = train_batch_size = self._miniBatchSize
-            # fold_size / mini-batch size
-            val_steps_per_epoch = int(int(entries_len / folds) / self._miniBatchSize)
-            # all-except-single-fold / mini-batch size
-            train_steps_per_epoch = int(int(math.floor(((folds - 1) / folds) * entries_len)) / self._miniBatchSize)
-
-        elif self._gradientVariant == GradientDescentVariant.batch:
-            # clip the data so that the length is a multiple of folds
-            entries_len = int(math.floor(data_entries_len / folds)) * folds
-            # fold size
-            val_batch_size = int(entries_len / folds)
-            # all-except-single-fold
-            train_batch_size = int(math.floor(((folds - 1) / folds) * entries_len))
-            val_steps_per_epoch = train_steps_per_epoch = 1
-
-        else:
-            # clip the data so that the length is a multiple of folds
-            entries_len = int(math.floor(data_entries_len / folds)) * folds
-            val_batch_size = train_batch_size = 1
-            val_steps_per_epoch = int(entries_len / folds)
-            train_steps_per_epoch = int(math.floor(((folds - 1) / folds) * entries_len))
-
-        fold_size = int(entries_len / folds)
-        validation_scores: List[float] = intermediate_val_scores[:]
-        for fold in range(current_fold, folds):
-            model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict,
-                                                model_folder=model_dir)
-
-            val_generator = self.data_generator(
-                data_entries[fold * fold_size: (fold + 1) * fold_size],
-                val_batch_size)
-            train_generator = self.data_generator(
-                data_entries[:fold * fold_size] + data_entries[(fold + 1) * fold_size:],
-                train_batch_size
-            )
-
-            history = model.fit_generator(
-                generator=train_generator,
-                steps_per_epoch=train_steps_per_epoch,
-                epochs=model_state.training_target_epochs - model_state.trained_epochs,
-                validation_data=val_generator,
-                validation_steps=val_steps_per_epoch,
-                callbacks=[model_state_saver]
-            )
-            validation_scores.append(history.history['val_loss'][-1])
-            self.state.intermediate_validation_scores = validation_scores[:]
-            self.state.completed_folds += 1
-            self._update_state(self.state)
-
-        return numpy.average(validation_scores)
 
     def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
 
@@ -307,6 +236,136 @@ class ModelDescriptor:
         )
         return history.history['val_loss'][-1]
 
+    def _kfold_core(self,
+                    epoch: int,
+                    build: Optional[int],
+                    current_fold: int,
+                    folds: int,
+                    intermediate_val_scores: List[float],
+                    restored_model: Optional[Tuple[Model, TrainingState, Dict[str, Any]]] = None) -> float:
+
+        if folds < 2:
+            raise Exception(f'Fold size({folds}) should be at least 2')
+        if self._gradientVariant == GradientDescentVariant.miniBatch and self._miniBatchSize % folds != 0:
+            raise Exception(f'Mini batch size({self._miniBatchSize}) should be devisible by number of folds({folds}).')
+
+        data_entries = self.data_locators()
+        data_entries_len = len(data_entries)
+
+        if self._gradientVariant == GradientDescentVariant.miniBatch:
+            batches = int(math.floor(data_entries_len / self._miniBatchSize))
+            # clip the data so that the length is a multiple of batch size
+            clipped_data_entries_len = batches * self._miniBatchSize
+            fold_size = clipped_data_entries_len / folds
+            if fold_size < self._miniBatchSize:
+                raise Exception(f'Fold size({fold_size}) should not be smaller then batch size({self._miniBatchSize})')
+
+            entries_len = clipped_data_entries_len
+            val_batch_size = train_batch_size = self._miniBatchSize
+            # fold_size / mini-batch size
+            val_steps_per_epoch = int(int(entries_len / folds) / self._miniBatchSize)
+            # all-except-single-fold / mini-batch size
+            train_steps_per_epoch = int(int(math.floor(((folds - 1) / folds) * entries_len)) / self._miniBatchSize)
+
+            print(f'Total entries: {data_entries_len}, used: {entries_len}')
+            print(f'Batch size: {train_batch_size}')
+            print(f'Train steps: {train_steps_per_epoch}, validation steps: {val_steps_per_epoch}')
+
+        elif self._gradientVariant == GradientDescentVariant.batch:
+            # clip the data so that the length is a multiple of folds
+            entries_len = int(math.floor(data_entries_len / folds)) * folds
+            # fold size
+            val_batch_size = int(entries_len / folds)
+            # all-except-single-fold
+            train_batch_size = int(math.floor(((folds - 1) / folds) * entries_len))
+            val_steps_per_epoch = train_steps_per_epoch = 1
+
+        else:
+            # clip the data so that the length is a multiple of folds
+            entries_len = int(math.floor(data_entries_len / folds)) * folds
+            val_batch_size = train_batch_size = 1
+            val_steps_per_epoch = int(entries_len / folds)
+            train_steps_per_epoch = int(math.floor(((folds - 1) / folds) * entries_len))
+
+        fold_size = int(entries_len / folds)
+        validation_scores: List[float] = intermediate_val_scores[:]
+        for fold in range(current_fold, folds):
+            print(f'Fold {current_fold + 1}/{folds}')
+            if restored_model:
+                model, model_state, history_dict = restored_model
+                restored_model = None
+            else:
+                model = self.create_model()
+                model_state = TrainingState(version=self._version, build=build if build else 0)
+                model_state.training_target_epochs += epoch
+                history_dict = {}
+
+            model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
+            model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict,
+                                                model_folder=model_dir)
+
+            val_generator = self.data_generator(
+                data_entries[fold * fold_size: (fold + 1) * fold_size],
+                val_batch_size)
+            train_generator = self.data_generator(
+                data_entries[:fold * fold_size] + data_entries[(fold + 1) * fold_size:],
+                train_batch_size
+            )
+
+            history = model.fit_generator(
+                generator=train_generator,
+                steps_per_epoch=train_steps_per_epoch,
+                epochs=model_state.training_target_epochs - model_state.trained_epochs,
+                validation_data=val_generator,
+                validation_steps=val_steps_per_epoch,
+                callbacks=[model_state_saver]
+            )
+            validation_scores.append(history.history['val_loss'][-1])
+            self.state.intermediate_validation_scores = validation_scores[:]
+            self.state.completed_folds += 1
+            self._update_state(self.state)
+
+        print('Validation scores')
+        print(validation_scores)
+        return numpy.average(validation_scores)
+
+    def _train_prod_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> Model:
+
+        model_dir = f'{self.data_path}/prod/{model_state.build}.v{model_state.version}'
+        model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict, model_folder=model_dir)
+
+        data_entries = self.data_locators()
+        data_entries_len = len(data_entries)
+
+        if self._gradientVariant == GradientDescentVariant.miniBatch:
+            batches = int(math.floor(data_entries_len / self._miniBatchSize))
+            # clip the data so that the length is a multiple of batch size
+            entries_len = batches * self._miniBatchSize
+            batch_size = self._miniBatchSize
+            steps_per_epoch = int(entries_len / self._miniBatchSize)
+
+            print(f'Total entries: {data_entries_len}, used: {entries_len}')
+            print(f'Batch size: {batch_size}')
+            print(f'Steps: {steps_per_epoch}')
+
+        elif self._gradientVariant == GradientDescentVariant.batch:
+            entries_len = data_entries_len
+            batch_size = entries_len
+            steps_per_epoch = 1
+        else:
+            entries_len = data_entries_len
+            batch_size = 1
+            steps_per_epoch = entries_len
+
+        generator = self.data_generator(data_locators=data_entries[:entries_len], batch_size=batch_size)
+        model.fit_generator(
+            generator=generator,
+            steps_per_epoch=steps_per_epoch,
+            epochs=model_state.training_target_epochs - model_state.trained_epochs,
+            callbacks=[model_state_saver]
+        )
+        return model
+
     def _update_state(self, state: ModelDescriptorState):
         if state:
             state.save_to_file(self.descriptor_path)
@@ -342,15 +401,17 @@ class ModelDescriptor:
         self._train_dev_core(model, model_state, history_dict)
         self._update_state(None)
 
-    def kfold_validate(self, folds: int, epoch: int, build: Optional[int] = None, from_scratch: bool = False) -> float:
-        model, model_state, history_dict = self._dev_model_or_fresh_added_epoch(epoch, build, from_scratch)
-        self._update_state(ModelDescriptorKFoldValidatingState(build=model_state.build, folds=folds, completed_folds=0))
-        validation_score = self._kfold_core(current_fold=0,
+    def kfold_validate(self, folds: int, epoch: int, build: Optional[int] = None) -> float:
+        target_build = build if build else self.latest_build(stage='dev') if self.latest_build(stage='dev') else 0
+        self._update_state(ModelDescriptorKFoldValidatingState(build=target_build,
+                                                               folds=folds,
+                                                               completed_folds=0,
+                                                               intermediate_validation_scores=[]))
+        validation_score = self._kfold_core(epoch=epoch,
+                                            build=target_build,
+                                            current_fold=0,
                                             folds=folds,
-                                            intermediate_val_scores=[],
-                                            model=model,
-                                            model_state=model_state,
-                                            history_dict=history_dict)
+                                            intermediate_val_scores=[])
         self._update_state(None)
         return validation_score
 
@@ -360,7 +421,7 @@ class ModelDescriptor:
                  epoch: Optional[int] = None,
                  build: Optional[int] = None) -> Any:
 
-        target_build = build if build else self.latest_build() if self.latest_build() else 0
+        target_build = build if build else self.latest_build(stage='dev') if self.latest_build(stage='dev') else 0
         # if _restored_model_info was set and we are in optimizing state
         # we are resuming optimization, load trials for this evaluation
         if (self.state
@@ -422,8 +483,29 @@ class ModelDescriptor:
         self._update_state(None)
         return best_run
 
-    def train_prod(self, epoch: Optional[int] = None, build: Optional[int] = None):
-        pass
+    def train_prod(self, epoch: Optional[int] = None, build: Optional[int] = None) -> Model:
+        # if build passed check if the prod model exists
+        if build:
+            loaded_model_res = self.load_model('prod', build, self._version)
+            if loaded_model_res:
+                print(f'Prod model(build:{build}, version:{self._version} already exists. Nothing done.')
+                _, _, history_dict = loaded_model_res
+                return history_dict['val_loss'][-1]
+
+            target_build = build
+        else:
+            # grab a build increment
+            target_build = self.latest_build(stage='prod') + 1 if self.latest_build(stage='prod') else 0
+
+        model = self.create_model()
+        model_state = TrainingState(version=self._version, build=target_build)
+        model_state.training_target_epochs += epoch
+        history_dict = {}
+
+        self._update_state(ModelDescriptorTrainingProdState(model_state.build))
+        target_model = self._train_prod_core(model=model, model_state=model_state, history_dict=history_dict)
+        self._update_state(None)
+        return target_model
 
     def resume_if_needed(self) -> Any:
         if self.state.type == ModelDescriptorStateType.trainingDev:
@@ -436,8 +518,10 @@ class ModelDescriptor:
                 return
 
             model, model_state, history_dict = loaded_model_res
-            self._train_dev_core(model, model_state, history_dict)
+            validation_score = self._train_dev_core(model, model_state, history_dict)
             self._update_state(None)
+            return validation_score
+
         elif self.state.type == ModelDescriptorStateType.optimizing:
             loaded_model_res = self.load_model(stage='dev', build=self.state.build, version=self._version)
             if not loaded_model_res:
@@ -455,5 +539,39 @@ class ModelDescriptor:
 
             self._restored_model_info = loaded_model_res
             return self.optimize()
+
+        elif self.state.type == ModelDescriptorStateType.kFoldValidating:
+            loaded_model_res = self.load_model(stage='dev', build=self.state.build, version=self._version)
+            if not loaded_model_res:
+                warn(f"Couldn't resume training. Kfold validating was set, "
+                     f"but build:{self.state.build}, version:{self._version} dev-model is not available."
+                     f"Version might have changed or model files were moved/deleted")
+                self._update_state(None)
+                return
+
+            _, model_state, _ = loaded_model_res
+            validation_score = self._kfold_core(epoch=model_state.training_target_epochs,
+                                                build=self.state.build,
+                                                current_fold=self.state.completed_folds,
+                                                folds=self.state.folds,
+                                                intermediate_val_scores=self.state.intermediate_validation_scores,
+                                                restored_model=loaded_model_res)
+            self._update_state(None)
+            return validation_score
+
+        elif self.state.type == ModelDescriptorStateType.trainingProd:
+            loaded_model_res = self.load_model(stage='prod', build=self.state.build, version=self._version)
+            if not loaded_model_res:
+                warn(f"Couldn't resume training. TrainingProd was set, "
+                     f"but build:{self.state.build}, version:{self._version} prod-model is not available."
+                     f"Version might have changed or model files were moved/deleted")
+                self._update_state(None)
+                return
+
+            model, model_state, history_dict = loaded_model_res
+            target_model = self._train_prod_core(model, model_state, history_dict)
+            self._update_state(None)
+            return target_model
+
         else:
             print('No task to resume')

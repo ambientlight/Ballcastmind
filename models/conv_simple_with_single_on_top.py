@@ -1,4 +1,4 @@
-from typing import Sequence, Any, Generator, Optional, Dict
+from typing import Sequence, Any, Generator, Optional, Dict, List
 from os.path import isfile
 from types import SimpleNamespace as Namespace
 import numpy
@@ -26,8 +26,9 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
         super().__init__(name)
 
     def create_model(self, space: Optional[Dict[str, Any]] = None) -> Model:
-        print('Hyperopt space')
-        print(space)
+        if space:
+            print('Using hyperopt space:')
+            print(space)
 
         for_optimization = True if space else False
 
@@ -74,7 +75,7 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
 
         return space
 
-    def data_locators(self):
+    def data_locators(self) -> List[Any]:
         frame_data_path = f'{sample_dir}/frame_data.json'
         if not isfile(frame_data_path):
             print("frame_data.json hasn't been found in sample directory")

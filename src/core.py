@@ -16,10 +16,7 @@ from src.threadsafe_generator import threadsafe_generator
 from models.conv_simple_with_single_on_top import ConvSimpleWithSingleOnTopModel
 
 simple_conv = ConvSimpleWithSingleOnTopModel(name='Conv_simple_with_single_on_top_0')
-if not simple_conv.is_idle:
-    result = simple_conv.resume_if_needed()
-    print('Optimization result')
-    print(result)
+simple_conv.resume_if_needed()
 
 # best_run = simple_conv.optimize(epoch=2, max_evals=2)
 # print('Optimization result')
