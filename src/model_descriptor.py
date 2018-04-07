@@ -580,7 +580,9 @@ class ModelDescriptor:
         return target_model
 
     def resume_if_needed(self) -> Optional[float]:
-        if self.state.type == ModelDescriptorStateType.trainingDev:
+        if not self.state:
+            print('No task to resume')
+        elif self.state.type == ModelDescriptorStateType.trainingDev:
             loaded_model_res = self.load_model(stage='dev', build=self.state.build, version=self._version)
             if not loaded_model_res:
                 warn(f"Couldn't resume training. TrainingDev was set, "
