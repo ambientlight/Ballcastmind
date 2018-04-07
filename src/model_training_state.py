@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any, Union, ClassVar, TypeVar, Type
+from typing import Optional, Dict, Any
 from pprint import pformat
 import json
 
@@ -8,12 +8,14 @@ class TrainingState:
     training_target_epochs: int
     version: int
     build: int
+    mode: str
 
     def __init__(self, version: int, build: int, training_state_dict: Optional[Dict[str, Any]] = None):
         self.version = version
         self.build = build
         self.trained_epochs = int(training_state_dict['trained_epochs']) if training_state_dict else 0
         self.training_target_epochs = int(training_state_dict['training_target_epochs']) if training_state_dict else 0
+        self.mode = training_state_dict['mode'] if training_state_dict else ''
 
     def __repr__(self):
         return pformat(vars(self))
@@ -22,7 +24,8 @@ class TrainingState:
         with open(file_path, 'w') as json_file:
             print(json.dumps({
                 'trained_epochs': self.trained_epochs,
-                'training_target_epochs': self.training_target_epochs
+                'training_target_epochs': self.training_target_epochs,
+                'mode': self.mode
             }), file=json_file)
 
     @classmethod

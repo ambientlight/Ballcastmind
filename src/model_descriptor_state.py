@@ -1,4 +1,4 @@
-from typing import ClassVar, Union, List
+from typing import ClassVar, Union, List, Dict
 from abc import abstractmethod
 from enum import Enum
 from os.path import isfile
@@ -63,14 +63,15 @@ class ModelDescriptorKFoldValidatingState(ModelDescriptorStateBase):
     type: ClassVar[ModelDescriptorStateBase] = ModelDescriptorStateType.kFoldValidating
     build: int
     completed_folds: int
-    intermediate_validation_scores: List[float]
+    intermediate_histories: List[Dict[str, List[float]]]
     folds: int
 
-    def __init__(self, build: int, completed_folds: int, folds: int, intermediate_validation_scores: List[float]):
+    def __init__(self, build: int,
+                 completed_folds: int, folds: int, intermediate_histories: List[Dict[str, List[float]]]):
         self.build = build
         self.completed_folds = completed_folds
         self.folds = folds
-        self.intermediate_validation_scores = intermediate_validation_scores
+        self.intermediate_histories = intermediate_histories
 
     def save_to_file(self, file_path: str):
         with open(file_path, 'w') as json_file:
@@ -79,7 +80,7 @@ class ModelDescriptorKFoldValidatingState(ModelDescriptorStateBase):
                 'build': self.build,
                 'completed_folds': self.completed_folds,
                 'folds': self.folds,
-                'intermediate_validation_scores': self.intermediate_validation_scores
+                'intermediate_histories': self.intermediate_histories
             }), file=json_file)
 
 
@@ -121,12 +122,18 @@ def model_descriptor_state_from_file(file_path: str) -> ModelDescriptorState:
                                                   completed_evals=int(descriptor_state_dict['completed_evals']),
                                                   target_evals=int(descriptor_state_dict['target_evals']))
         elif descriptor_state_dict['type'] == ModelDescriptorStateType.kFoldValidating.value:
+            def parse_history(history: Dict[str, List[str]]) -> Dict[str, List[float]]:
+                target_dict = {}
+                for key, value in history.items():
+                    target_dict[key] = [float(string_entry) for string_entry in value]
+                return target_dict
+
             return ModelDescriptorKFoldValidatingState(
                 build=int(descriptor_state_dict['build']),
                 completed_folds=int(descriptor_state_dict['completed_folds']),
                 folds=int(descriptor_state_dict['folds']),
-                intermediate_validation_scores=[float(validation_score) for validation_score in
-                                                descriptor_state_dict['intermediate_validation_scores']])
+                intermediate_histories=[parse_history(history) for history in
+                                        descriptor_state_dict['intermediate_histories']])
         elif descriptor_state_dict['type'] == ModelDescriptorStateType.trainingProd.value:
             return ModelDescriptorTrainingProdState(build=int(descriptor_state_dict['build']))
         else:

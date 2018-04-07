@@ -20,7 +20,7 @@ from src.model_descriptor_state import ModelDescriptorStateType, ModelDescriptor
     ModelDescriptorTrainingProdState, model_descriptor_state_from_file
 from src.model_training_state import TrainingState
 from src.model_state_saver import ModelStateSaver
-
+from src.model_utils import write_charts_from_history
 
 _model_dir_path = '../data/output'
 BuildAndVersion = namedtuple('BuildAndVersion', ['build', 'version'])
@@ -50,7 +50,7 @@ class ModelDescriptor:
     state: ModelDescriptorState
 
     # used internally by resume_if_needed and optimization's object
-    _restored_model_info: Optional[Tuple[Model, TrainingState, Dict[str, Any]]]
+    _restored_model_info: Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]]
 
     @property
     def data_path(self) -> str: return f'{_model_dir_path}/{self.name}'
@@ -123,7 +123,7 @@ class ModelDescriptor:
         return r'^(\d+)\.v(\d+)$'
 
     def load_model(self, stage: str, build: int, version: int) -> Optional[
-        Tuple[Model, TrainingState, Dict[str, Any]]
+        Tuple[Model, TrainingState, Dict[str, List[float]]]
     ]:
         directory_path = f'{self.data_path}/{stage}'
         if not isdir(directory_path):
@@ -175,7 +175,7 @@ class ModelDescriptor:
 
         return dev_build_versions_matching_version[-1].build
 
-    def latest_dev_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, Any]]]:
+    def latest_dev_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]]:
 
         latest_build = self.latest_build(stage='dev')
         if not latest_build:
@@ -183,7 +183,16 @@ class ModelDescriptor:
 
         return self.load_model(stage='dev', build=latest_build, version=self._version)
 
-    def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
+    def latest_prod_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]]:
+
+        latest_build = self.latest_build(stage='prod')
+        if not latest_build:
+            return None
+
+        return self.load_model(stage='prod', build=latest_build, version=self._version)
+
+    def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, List[float]]) -> float:
+        print(f'Training development model (build: {model_state.build}, version: {model_state.version})')
 
         model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
         logs_dir = f'{model_dir}/logs'
@@ -230,7 +239,7 @@ class ModelDescriptor:
                                                   batch_size=1)
             val_generator = self.data_generator(data_entries[train_entries_total:],
                                                 batch_size=1)
-        history = model.fit_generator(
+        model.fit_generator(
             generator=train_generator,
             steps_per_epoch=steps_per_epoch,
             epochs=model_state.training_target_epochs - model_state.trained_epochs,
@@ -240,15 +249,17 @@ class ModelDescriptor:
                                                       write_images=True,
                                                       write_graph=True)]
         )
-        return history.history['val_loss'][-1]
+
+        write_charts_from_history(model_state_saver.history, f'{model_dir}/charts')
+        return model_state_saver.history['val_loss'][-1]
 
     def _kfold_core(self,
                     epoch: int,
                     build: Optional[int],
                     current_fold: int,
                     folds: int,
-                    intermediate_val_scores: List[float],
-                    restored_model: Optional[Tuple[Model, TrainingState, Dict[str, Any]]] = None) -> float:
+                    intermediate_histories: List[Dict[str, List[float]]],
+                    restored_model: Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]] = None) -> float:
 
         if folds < 2:
             raise Exception(f'Fold size({folds}) should be at least 2')
@@ -293,10 +304,11 @@ class ModelDescriptor:
             val_steps_per_epoch = int(entries_len / folds)
             train_steps_per_epoch = int(math.floor(((folds - 1) / folds) * entries_len))
 
+        model_dir = None
         fold_size = int(entries_len / folds)
-        validation_scores: List[float] = intermediate_val_scores[:]
+        histories: List[Dict[str, List[float]]] = intermediate_histories[:]
         for fold in range(current_fold, folds):
-            print(f'Fold {fold + 1}/{folds}')
+            print(f'K-fold validating: Fold {fold + 1}/{folds}')
             if restored_model:
                 model, model_state, history_dict = restored_model
                 restored_model = None
@@ -304,6 +316,7 @@ class ModelDescriptor:
                 model = self.create_model()
                 model_state = TrainingState(version=self._version, build=build if build else 0)
                 model_state.training_target_epochs += epoch
+                model_state.mode = ModelDescriptorStateType.kFoldValidating.value
                 history_dict = {}
 
             model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
@@ -322,7 +335,7 @@ class ModelDescriptor:
                 train_batch_size
             )
 
-            history = model.fit_generator(
+            model.fit_generator(
                 generator=train_generator,
                 steps_per_epoch=train_steps_per_epoch,
                 epochs=model_state.training_target_epochs - model_state.trained_epochs,
@@ -332,16 +345,36 @@ class ModelDescriptor:
                                                           write_images=True,
                                                           write_graph=True)]
             )
-            validation_scores.append(history.history['val_loss'][-1])
-            self.state.intermediate_validation_scores = validation_scores[:]
+            histories.append(model_state_saver.history)
+            self.state.intermediate_histories = histories[:]
             self.state.completed_folds += 1
             self._update_state(self.state)
 
-        print('Validation scores')
-        print(validation_scores)
-        return numpy.average(validation_scores)
+        # compute the average and save as seperate history
+        keys = list(histories[0].keys())
+        epochs = len(histories[0][keys[0]])
+        average_history: Dict[str, List[float]] = {}
+        for key in keys:
+            average_history[key] = []
+            for epoch in range(epochs):
+                average_history[key].append(numpy.average([history[key][epoch] for history in histories]))
 
-    def _train_prod_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> Model:
+        # guards the case when training was not performed (restored model training is somehow complete)
+        if not model_dir:
+            if restored_model:
+                _, model_state, _ = restored_model
+                model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
+
+        history_path = f'{model_dir}/kfold_average_history.json'
+        charts_dir = f'{model_dir}/kfold_charts'
+        with open(history_path, 'w') as json_file:
+            print(json.dumps(average_history), file=json_file)
+
+        write_charts_from_history(average_history, charts_dir)
+        return average_history['val_loss'][-1]
+
+    def _train_prod_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, List[float]]) -> Model:
+        print(f'Training production model (build: {model_state.build}, version: {model_state.version})')
 
         model_dir = f'{self.data_path}/prod/{model_state.build}.v{model_state.version}'
         logs_dir = f'{model_dir}/logs'
@@ -393,7 +426,7 @@ class ModelDescriptor:
         self.state = state
 
     def _dev_model_or_fresh_added_epoch(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False)\
-            -> Tuple[Model, TrainingState, Dict[str, Any]]:
+            -> Tuple[Model, TrainingState, Dict[str, List[float]]]:
 
         # search if dev model exists for this version
         if not from_scratch:
@@ -415,6 +448,8 @@ class ModelDescriptor:
 
     def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False) -> float:
         model, model_state, history_dict = self._dev_model_or_fresh_added_epoch(epoch, build, from_scratch)
+        model_state.mode = ModelDescriptorStateType.trainingDev.value
+
         self._update_state(ModelDescriptorTrainingDevState(model_state.build))
         validation_score = self._train_dev_core(model, model_state, history_dict)
         self._update_state(None)
@@ -425,12 +460,12 @@ class ModelDescriptor:
         self._update_state(ModelDescriptorKFoldValidatingState(build=target_build,
                                                                folds=folds,
                                                                completed_folds=0,
-                                                               intermediate_validation_scores=[]))
+                                                               intermediate_histories=[]))
         validation_score = self._kfold_core(epoch=epoch,
                                             build=target_build,
                                             current_fold=0,
                                             folds=folds,
-                                            intermediate_val_scores=[])
+                                            intermediate_histories=[])
         self._update_state(None)
         return validation_score
 
@@ -438,7 +473,7 @@ class ModelDescriptor:
     def optimize(self,
                  max_evals: Optional[int] = None,
                  epoch: Optional[int] = None,
-                 build: Optional[int] = None) -> Any:
+                 build: Optional[int] = None) -> float:
 
         target_build = build if build else self.latest_build(stage='dev') if self.latest_build(stage='dev') else 0
         # if _restored_model_info was set and we are in optimizing state
@@ -463,8 +498,12 @@ class ModelDescriptor:
                 ModelDescriptorOptimizingState(build=target_build, completed_evals=0, target_evals=max_evals)
             )
 
+        # set inside the objective
+        best_run_path: Optional[str] = None
+
         def objective(space: Dict[str, Any]) -> Dict[str, Any]:
             nonlocal epoch
+            nonlocal best_run_path
 
             if (self.state
                     and self.state.type == ModelDescriptorStateType.optimizing
@@ -477,13 +516,15 @@ class ModelDescriptor:
                 # model_state target_epoch should be used for all subsequent trainings
                 epoch = model_state.training_target_epochs
 
-                print(f'Eval: {self.state.completed_evals + 1}/{self.state.target_evals}, using restored model')
+                print(f'Hyperopt eval: {self.state.completed_evals + 1}/{self.state.target_evals}, restored model')
             else:
                 model = self.create_model(space)
                 model_state = TrainingState(version=self._version, build=target_build)
                 model_state.training_target_epochs += epoch if epoch else 10
-                print(f'Eval: {self.state.completed_evals + 1}/{self.state.target_evals}, using fresh model')
+                model_state.mode = ModelDescriptorStateType.optimizing.value
+                print(f'Hyperopt eval: {self.state.completed_evals + 1}/{self.state.target_evals}, fresh model')
 
+            best_run_path = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}/best_hparam_space.json'
             validation_loss = self._train_dev_core(model, model_state, {})
             self.state.completed_evals += 1
             self.state.save_to_file(self.descriptor_path)
@@ -502,7 +543,16 @@ class ModelDescriptor:
         self._update_state(None)
         if isfile(self.trials_path):
             remove(self.trials_path)
-        return best_run
+
+        if best_run_path:
+            with open(best_run_path, 'w') as json_file:
+                print(json.dumps(best_run), file=json_file)
+        else:
+            warn('best_run_path is not set and thus best hyperparameter space is not preserved')
+
+        losses = trials.losses()
+        best_losses_index = numpy.argmin(losses)
+        return losses[best_losses_index]
 
     def train_prod(self, epoch: Optional[int] = None, build: Optional[int] = None) -> Model:
         # if build passed check if the prod model exists
@@ -510,8 +560,8 @@ class ModelDescriptor:
             loaded_model_res = self.load_model('prod', build, self._version)
             if loaded_model_res:
                 print(f'Prod model(build:{build}, version:{self._version} already exists. Nothing done.')
-                _, _, history_dict = loaded_model_res
-                return history_dict['val_loss'][-1]
+                model, _, _ = loaded_model_res
+                return model
 
             target_build = build
         else:
@@ -521,6 +571,7 @@ class ModelDescriptor:
         model = self.create_model()
         model_state = TrainingState(version=self._version, build=target_build)
         model_state.training_target_epochs += epoch
+        model_state.mode = ModelDescriptorStateType.trainingProd.value
         history_dict = {}
 
         self._update_state(ModelDescriptorTrainingProdState(model_state.build))
@@ -528,7 +579,7 @@ class ModelDescriptor:
         self._update_state(None)
         return target_model
 
-    def resume_if_needed(self) -> Any:
+    def resume_if_needed(self) -> Optional[float]:
         if self.state.type == ModelDescriptorStateType.trainingDev:
             loaded_model_res = self.load_model(stage='dev', build=self.state.build, version=self._version)
             if not loaded_model_res:
@@ -575,7 +626,7 @@ class ModelDescriptor:
                                                 build=self.state.build,
                                                 current_fold=self.state.completed_folds,
                                                 folds=self.state.folds,
-                                                intermediate_val_scores=self.state.intermediate_validation_scores,
+                                                intermediate_histories=self.state.intermediate_histories,
                                                 restored_model=loaded_model_res)
             self._update_state(None)
             return validation_score
@@ -590,9 +641,9 @@ class ModelDescriptor:
                 return
 
             model, model_state, history_dict = loaded_model_res
-            target_model = self._train_prod_core(model, model_state, history_dict)
+            self._train_prod_core(model, model_state, history_dict)
             self._update_state(None)
-            return target_model
+            return
 
         else:
             print('No task to resume')
