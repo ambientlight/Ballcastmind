@@ -2,7 +2,7 @@ from collections import namedtuple
 from enum import Enum
 from typing import ClassVar, Optional, Any, Sequence, Generator, Dict, Tuple, List
 from abc import abstractmethod
-from os import listdir, remove
+from os import listdir, remove, mkdir
 from os.path import isdir, isfile
 from warnings import warn
 import json
@@ -12,6 +12,7 @@ import pickle
 import numpy
 
 from keras.models import Model, load_model
+from keras.callbacks import TensorBoard
 from hyperopt import tpe, Trials, STATUS_OK, fmin
 
 from src.model_descriptor_state import ModelDescriptorStateType, ModelDescriptorState, \
@@ -185,6 +186,10 @@ class ModelDescriptor:
     def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> float:
 
         model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
+        logs_dir = f'{model_dir}/logs'
+        if not isdir(logs_dir):
+            mkdir(logs_dir)
+
         model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict, model_folder=model_dir)
 
         data_entries = self.data_locators()
@@ -225,14 +230,15 @@ class ModelDescriptor:
                                                   batch_size=1)
             val_generator = self.data_generator(data_entries[train_entries_total:],
                                                 batch_size=1)
-
         history = model.fit_generator(
             generator=train_generator,
             steps_per_epoch=steps_per_epoch,
             epochs=model_state.training_target_epochs - model_state.trained_epochs,
             validation_data=val_generator,
             validation_steps=validation_steps,
-            callbacks=[model_state_saver]
+            callbacks=[model_state_saver, TensorBoard(log_dir=logs_dir,
+                                                      write_images=True,
+                                                      write_graph=True)]
         )
         return history.history['val_loss'][-1]
 
@@ -290,7 +296,7 @@ class ModelDescriptor:
         fold_size = int(entries_len / folds)
         validation_scores: List[float] = intermediate_val_scores[:]
         for fold in range(current_fold, folds):
-            print(f'Fold {current_fold + 1}/{folds}')
+            print(f'Fold {fold + 1}/{folds}')
             if restored_model:
                 model, model_state, history_dict = restored_model
                 restored_model = None
@@ -301,6 +307,10 @@ class ModelDescriptor:
                 history_dict = {}
 
             model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
+            logs_dir = f'{model_dir}/logs'
+            if not isdir(logs_dir):
+                mkdir(logs_dir)
+
             model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict,
                                                 model_folder=model_dir)
 
@@ -318,7 +328,9 @@ class ModelDescriptor:
                 epochs=model_state.training_target_epochs - model_state.trained_epochs,
                 validation_data=val_generator,
                 validation_steps=val_steps_per_epoch,
-                callbacks=[model_state_saver]
+                callbacks=[model_state_saver, TensorBoard(log_dir=logs_dir,
+                                                          write_images=True,
+                                                          write_graph=True)]
             )
             validation_scores.append(history.history['val_loss'][-1])
             self.state.intermediate_validation_scores = validation_scores[:]
@@ -332,6 +344,10 @@ class ModelDescriptor:
     def _train_prod_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, Any]) -> Model:
 
         model_dir = f'{self.data_path}/prod/{model_state.build}.v{model_state.version}'
+        logs_dir = f'{model_dir}/logs'
+        if not isdir(logs_dir):
+            mkdir(logs_dir)
+
         model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict, model_folder=model_dir)
 
         data_entries = self.data_locators()
@@ -362,7 +378,9 @@ class ModelDescriptor:
             generator=generator,
             steps_per_epoch=steps_per_epoch,
             epochs=model_state.training_target_epochs - model_state.trained_epochs,
-            callbacks=[model_state_saver]
+            callbacks=[model_state_saver, TensorBoard(log_dir=logs_dir,
+                                                      write_images=True,
+                                                      write_graph=True)]
         )
         return model
 
@@ -395,11 +413,12 @@ class ModelDescriptor:
         model_state.training_target_epochs += epoch
         return model, model_state, history_dict
 
-    def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False):
+    def train_validate(self, epoch: int = 10, build: Optional[int] = None, from_scratch: bool = False) -> float:
         model, model_state, history_dict = self._dev_model_or_fresh_added_epoch(epoch, build, from_scratch)
         self._update_state(ModelDescriptorTrainingDevState(model_state.build))
-        self._train_dev_core(model, model_state, history_dict)
+        validation_score = self._train_dev_core(model, model_state, history_dict)
         self._update_state(None)
+        return validation_score
 
     def kfold_validate(self, folds: int, epoch: int, build: Optional[int] = None) -> float:
         target_build = build if build else self.latest_build(stage='dev') if self.latest_build(stage='dev') else 0
@@ -458,12 +477,12 @@ class ModelDescriptor:
                 # model_state target_epoch should be used for all subsequent trainings
                 epoch = model_state.training_target_epochs
 
-                print(f'Eval: {self.state.completed_evals + 1}, using restored model')
+                print(f'Eval: {self.state.completed_evals + 1}/{self.state.target_evals}, using restored model')
             else:
                 model = self.create_model(space)
                 model_state = TrainingState(version=self._version, build=target_build)
                 model_state.training_target_epochs += epoch if epoch else 10
-                print(f'Eval: {self.state.completed_evals + 1}, using fresh model')
+                print(f'Eval: {self.state.completed_evals + 1}/{self.state.target_evals}, using fresh model')
 
             validation_loss = self._train_dev_core(model, model_state, {})
             self.state.completed_evals += 1
@@ -476,11 +495,13 @@ class ModelDescriptor:
                             space=self.hyperopt_space(),
                             algo=tpe.suggest,
                             max_evals=i + 1,
-                            trials=Trials(),
+                            trials=trials,
                             verbose=1)
             pickle.dump(trials, open(self.trials_path, 'wb'))
 
         self._update_state(None)
+        if isfile(self.trials_path):
+            remove(self.trials_path)
         return best_run
 
     def train_prod(self, epoch: Optional[int] = None, build: Optional[int] = None) -> Model:
