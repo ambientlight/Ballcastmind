@@ -181,7 +181,7 @@ class ModelDescriptor:
     def latest_dev_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]]:
 
         latest_build = self.latest_build(stage='dev')
-        if not latest_build:
+        if latest_build is None:
             return None
 
         return self.load_model(stage='dev', build=latest_build, version=self._version)
@@ -189,7 +189,7 @@ class ModelDescriptor:
     def latest_prod_model(self) -> Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]]:
 
         latest_build = self.latest_build(stage='prod')
-        if not latest_build:
+        if latest_build is None:
             return None
 
         return self.load_model(stage='prod', build=latest_build, version=self._version)
@@ -441,17 +441,19 @@ class ModelDescriptor:
 
         # search if dev model exists for this version
         if not from_scratch:
-            latest_dev_model_res = self.latest_dev_model() if not build else self.load_model(stage='dev',
-                                                                                             build=build,
-                                                                                             version=self._version)
+            latest_dev_model_res = self.latest_dev_model() if build is None else self.load_model(stage='dev',
+                                                                                                 build=build,
+                                                                                                 version=self._version)
         else:
             latest_dev_model_res = None
 
         if not latest_dev_model_res:
+            print('Created a fresh model')
             model = self.create_model()
             model_state = TrainingState(version=self._version, build=build if build else 0)
             history_dict = {}
         else:
+            print('Loaded existing model')
             model, model_state, history_dict = latest_dev_model_res
 
         model_state.training_target_epochs += epoch
