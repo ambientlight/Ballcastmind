@@ -22,7 +22,6 @@ from src.model_training_state import TrainingState
 from src.model_state_saver import ModelStateSaver
 from src.model_utils import write_charts_from_history
 
-_model_dir_path = '../data/output'
 BuildAndVersion = namedtuple('BuildAndVersion', ['build', 'version'])
 
 
@@ -52,8 +51,10 @@ class ModelDescriptor:
     # used internally by resume_if_needed and optimization's object
     _restored_model_info: Optional[Tuple[Model, TrainingState, Dict[str, List[float]]]]
 
+    _model_dir_path: str
+
     @property
-    def data_path(self) -> str: return f'{_model_dir_path}/{self.name}'
+    def data_path(self) -> str: return f'{self._model_dir_path}/{self.name}'
 
     @property
     def descriptor_path(self) -> str: return f'{self.data_path}/descriptor.json'
@@ -84,14 +85,16 @@ class ModelDescriptor:
     def data_generator(self, data_locators: Sequence[Any], batch_size: int) -> Generator:
         raise NotImplemented
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, model_dir_path: str):
         self.name = name
+        self._model_dir_path = model_dir_path
         descriptor_path = f'{self.data_path}/descriptor.json'
 
         def init_origin():
             self.state = None
 
         if not isdir(self.data_path):
+            mkdir(self.data_path)
             init_origin()
             return
         if not isfile(descriptor_path):
@@ -191,13 +194,23 @@ class ModelDescriptor:
 
         return self.load_model(stage='prod', build=latest_build, version=self._version)
 
+    def _create_model_dirs_if_needed(self, stage: str, model_state: TrainingState):
+        stage_dir = f'{self.data_path}/{stage}'
+        model_dir = f'{stage_dir}/{model_state.build}.v{model_state.version}'
+        logs_dir = f'{model_dir}/logs'
+        if not isdir(stage_dir):
+            mkdir(stage_dir)
+        if not isdir(model_dir):
+            mkdir(model_dir)
+        if not isdir(logs_dir):
+            mkdir(logs_dir)
+
     def _train_dev_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, List[float]]) -> float:
         print(f'Training development model (build: {model_state.build}, version: {model_state.version})')
 
+        self._create_model_dirs_if_needed(stage='dev', model_state=model_state)
         model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
         logs_dir = f'{model_dir}/logs'
-        if not isdir(logs_dir):
-            mkdir(logs_dir)
 
         model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict, model_folder=model_dir)
 
@@ -319,10 +332,9 @@ class ModelDescriptor:
                 model_state.mode = ModelDescriptorStateType.kFoldValidating.value
                 history_dict = {}
 
+            self._create_model_dirs_if_needed(stage='dev', model_state=model_state)
             model_dir = f'{self.data_path}/dev/{model_state.build}.v{model_state.version}'
             logs_dir = f'{model_dir}/logs'
-            if not isdir(logs_dir):
-                mkdir(logs_dir)
 
             model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict,
                                                 model_folder=model_dir)
@@ -376,10 +388,9 @@ class ModelDescriptor:
     def _train_prod_core(self, model: Model, model_state: TrainingState, history_dict: Dict[str, List[float]]) -> Model:
         print(f'Training production model (build: {model_state.build}, version: {model_state.version})')
 
+        self._create_model_dirs_if_needed(stage='prod', model_state=model_state)
         model_dir = f'{self.data_path}/prod/{model_state.build}.v{model_state.version}'
         logs_dir = f'{model_dir}/logs'
-        if not isdir(logs_dir):
-            mkdir(logs_dir)
 
         model_state_saver = ModelStateSaver(training_state=model_state, history=history_dict, model_folder=model_dir)
 
@@ -566,11 +577,11 @@ class ModelDescriptor:
             target_build = build
         else:
             # grab a build increment
-            target_build = self.latest_build(stage='prod') + 1 if self.latest_build(stage='prod') else 0
+            target_build = self.latest_build(stage='prod') + 1 if self.latest_build(stage='prod') is not None else 0
 
         model = self.create_model()
         model_state = TrainingState(version=self._version, build=target_build)
-        model_state.training_target_epochs += epoch
+        model_state.training_target_epochs += epoch if epoch else 10
         model_state.mode = ModelDescriptorStateType.trainingProd.value
         history_dict = {}
 

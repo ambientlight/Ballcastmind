@@ -13,7 +13,7 @@ from src.model_descriptor import ModelDescriptor
 from src.threadsafe_generator import threadsafe_generator
 
 
-data_directory_path = '../data'
+data_directory_path = './data'
 sample_name = '10_min_sample'
 sample_id = 'cebd5588-926b-486b-8add-bbe1e74a1226'
 sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
@@ -22,8 +22,8 @@ sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
     _version = 0
 
-    def __init__(self, name: str):
-        super().__init__(name)
+    def __init__(self, name: str, model_dir_path: str):
+        super().__init__(name, model_dir_path)
 
     def create_model(self, space: Optional[Dict[str, Any]] = None) -> Model:
         if space:
