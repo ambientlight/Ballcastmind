@@ -8,6 +8,7 @@ from keras.models import Model
 from keras.preprocessing.image import load_img, img_to_array
 from keras import Input, layers
 from hyperopt import hp
+from random import shuffle
 
 from src.model_descriptor import ModelDescriptor
 from src.threadsafe_generator import threadsafe_generator
@@ -19,8 +20,8 @@ sample_id = 'cebd5588-926b-486b-8add-bbe1e74a1226'
 sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
-class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
-    _version = 0
+class Conv2dMaxpool6xDenseHeads7(ModelDescriptor):
+    _version = 2
 
     def __init__(self, name: str, model_dir_path: str):
         super().__init__(name, model_dir_path)
@@ -33,9 +34,9 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
         for_optimization = True if space else False
 
         img_input = Input(shape=(640, 400, 3), dtype='float32')
-        x = layers.Conv2D(32 if not for_optimization else space['Conv2D_0'], 3, activation='relu')(img_input)
+        x = layers.Conv2D(64 if not for_optimization else space['Conv2D_0'], 3, activation='relu')(img_input)
         x = layers.MaxPooling2D(2)(x)
-        x = layers.Conv2D(64 if not for_optimization else space['Conv2D_1'], 3, activation='relu')(x)
+        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_1'], 3, activation='relu')(x)
         x = layers.MaxPooling2D(2)(x)
         x = layers.Conv2D(128 if not for_optimization else space['Conv2D_2'], 3, activation='relu')(x)
         x = layers.MaxPooling2D(2)(x)
@@ -46,20 +47,14 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
         x = layers.Conv2D(128 if not for_optimization else space['Conv2D_5'], 3, activation='relu')(x)
         x = layers.MaxPooling2D(2)(x)
         x = layers.Flatten()(x)
-        pos_x_dense = layers.Dense(256, activation='relu')(x)
-        pos_y_dense = layers.Dense(256, activation='relu')(x)
-        pos_z_dense = layers.Dense(256, activation='relu')(x)
-        rot_x_dense = layers.Dense(256, activation='relu')(x)
-        rot_y_dense = layers.Dense(256, activation='relu')(x)
-        rot_z_dense = layers.Dense(256, activation='relu')(x)
-        fov_dense = layers.Dense(64, activation='relu')(x)
-        pos_x_pred = layers.Dense(1, name='pos_x')(pos_x_dense)
-        pos_y_pred = layers.Dense(1, name='pos_y')(pos_y_dense)
-        pos_z_pred = layers.Dense(1, name='pos_z')(pos_z_dense)
-        rot_x_pred = layers.Dense(1, name='rot_x')(rot_x_dense)
-        rot_y_pred = layers.Dense(1, name='rot_y')(rot_y_dense)
-        rot_z_pred = layers.Dense(1, name='rot_z')(rot_z_dense)
-        fov_pred = layers.Dense(1, name='fov')(fov_dense)
+        x = layers.Dense(512, activation='relu')(x)
+        pos_x_pred = layers.Dense(1, name='pos_x')(x)
+        pos_y_pred = layers.Dense(1, name='pos_y')(x)
+        pos_z_pred = layers.Dense(1, name='pos_z')(x)
+        rot_x_pred = layers.Dense(1, name='rot_x')(x)
+        rot_y_pred = layers.Dense(1, name='rot_y')(x)
+        rot_z_pred = layers.Dense(1, name='rot_z')(x)
+        fov_pred = layers.Dense(1, name='fov')(x)
 
         model = Model(img_input, [pos_x_pred, pos_y_pred, pos_z_pred, rot_x_pred, rot_y_pred, rot_z_pred, fov_pred])
         model.compile(optimizer='rmsprop',
@@ -102,14 +97,13 @@ class ConvSimpleWithSingleOnTopModel(ModelDescriptor):
 
         while 1:
             epoch += 1
-            # target_samples = data_locators[:]
-            # if should_shuffle:
-            #     shuffle(target_samples)
+            target_samples = data_locators[:]
+            shuffle(target_samples)
 
             read_count = 0
-            while read_count < (len(data_locators) - batch_size):
-                batch_frame_samples = data_locators[read_count: read_count + batch_size]
-                xs = numpy.array([ConvSimpleWithSingleOnTopModel.frame_sample_load_image(frame_sample, target_size)
+            while read_count < (len(target_samples) - batch_size):
+                batch_frame_samples = target_samples[read_count: read_count + batch_size]
+                xs = numpy.array([Conv2dMaxpool6xDenseHeads7.frame_sample_load_image(frame_sample, target_size)
                                   for frame_sample in batch_frame_samples])
                 pos_xs = numpy.array([frame_sample.camera.position.x for frame_sample in batch_frame_samples])
                 pos_ys = numpy.array([frame_sample.camera.position.y for frame_sample in batch_frame_samples])
