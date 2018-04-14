@@ -21,7 +21,7 @@ sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
 class Conv2dMaxpool6xDenseHeads7(ModelDescriptor):
-    _version = 2
+    _version = 3
 
     def __init__(self, name: str, model_dir_path: str):
         super().__init__(name, model_dir_path)
@@ -34,9 +34,9 @@ class Conv2dMaxpool6xDenseHeads7(ModelDescriptor):
         for_optimization = True if space else False
 
         img_input = Input(shape=(640, 400, 3), dtype='float32')
-        x = layers.Conv2D(64 if not for_optimization else space['Conv2D_0'], 3, activation='relu')(img_input)
+        x = layers.Conv2D(32 if not for_optimization else space['Conv2D_0'], 3, activation='relu')(img_input)
         x = layers.MaxPooling2D(2)(x)
-        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_1'], 3, activation='relu')(x)
+        x = layers.Conv2D(64 if not for_optimization else space['Conv2D_1'], 3, activation='relu')(x)
         x = layers.MaxPooling2D(2)(x)
         x = layers.Conv2D(128 if not for_optimization else space['Conv2D_2'], 3, activation='relu')(x)
         x = layers.MaxPooling2D(2)(x)
