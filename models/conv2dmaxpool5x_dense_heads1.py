@@ -21,7 +21,7 @@ sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
 class Conv2dMaxpool5xDenseHeads1(ModelDescriptor):
-    _version = 4
+    _version = 6
 
     def __init__(self, name: str, model_dir_path: str):
         super().__init__(name, model_dir_path)
@@ -33,20 +33,63 @@ class Conv2dMaxpool5xDenseHeads1(ModelDescriptor):
 
         for_optimization = True if space else False
 
-        img_input = Input(shape=(640, 400, 3), dtype='float32')
-        x = layers.Conv2D(32 if not for_optimization else space['Conv2D_0'], 5, activation='relu')(img_input)
-        x = layers.MaxPooling2D(2)(x)
-        x = layers.Conv2D(64 if not for_optimization else space['Conv2D_1'], 5, activation='relu')(x)
-        x = layers.MaxPooling2D(2)(x)
-        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_2'], 5, activation='relu')(x)
-        x = layers.MaxPooling2D(2)(x)
-        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_3'], 5, activation='relu')(x)
-        x = layers.MaxPooling2D(2)(x)
-        x = layers.Conv2D(128 if not for_optimization else space['Conv2D_4'], 5, activation='relu')(x)
-        x = layers.MaxPooling2D(2)(x)
-        x = layers.Flatten()(x)
-        x = layers.Dense(512, activation='relu')(x)
-        rot_x_pred = layers.Dense(1, name='rot_x')(x)
+        if for_optimization:
+            if space['conv_kind'] == 'standard':
+                img_input = Input(shape=(640, 400, 3), dtype='float32')
+                x = layers.Conv2D(32 if not for_optimization else space['Conv2D_0'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(img_input)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.Conv2D(64 if not for_optimization else space['Conv2D_1'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.Conv2D(128 if not for_optimization else space['Conv2D_2'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.Conv2D(128 if not for_optimization else space['Conv2D_3'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.Conv2D(128 if not for_optimization else space['Conv2D_4'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.Flatten()(x)
+                x = layers.Dense(space['dense0'], activation='relu')(x)
+                rot_x_pred = layers.Dense(1, name='rot_x')(x)
+            else:
+                img_input = Input(shape=(640, 400, 3), dtype='float32')
+                x = layers.SeparableConv2D(32 if not for_optimization else space['Conv2D_0'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(img_input)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.SeparableConv2D(64 if not for_optimization else space['Conv2D_1'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.SeparableConv2D(128 if not for_optimization else space['Conv2D_2'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.SeparableConv2D(128 if not for_optimization else space['Conv2D_3'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.SeparableConv2D(128 if not for_optimization else space['Conv2D_4'],
+                                           5 if not for_optimization else space['kernel'], activation='relu')(x)
+                x = layers.MaxPooling2D(2)(x)
+                x = layers.Flatten()(x)
+                x = layers.Dense(space['dense0'], activation='relu')(x)
+                rot_x_pred = layers.Dense(1, name='rot_x')(x)
+
+        else:
+            img_input = Input(shape=(640, 400, 3), dtype='float32')
+            x = layers.SeparableConv2D(32, 5, activation='relu')(img_input)
+            x = layers.MaxPooling2D(2)(x)
+            x = layers.SeparableConv2D(64, 5, activation='relu')(x)
+            x = layers.MaxPooling2D(2)(x)
+            x = layers.SeparableConv2D(128, 5, activation='relu')(x)
+            x = layers.MaxPooling2D(2)(x)
+            x = layers.SeparableConv2D(128, 5, activation='relu')(x)
+            x = layers.MaxPooling2D(2)(x)
+            x = layers.SeparableConv2D(128, 5, activation='relu')(x)
+            x = layers.MaxPooling2D(2)(x)
+            x = layers.Flatten()(x)
+            x = layers.Dense(512, activation='relu')(x)
+            rot_x_pred = layers.Dense(1, name='rot_x')(x)
 
         model = Model(img_input, rot_x_pred)
         model.compile(optimizer='rmsprop',
@@ -59,6 +102,9 @@ class Conv2dMaxpool5xDenseHeads1(ModelDescriptor):
             key = f'Conv2D_{i}'
             space[key] = hp.choice(key, [32, 64, 128])
 
+        space['kernel'] = hp.choice('kernel', [3, 5])
+        space['dense0'] = hp.choice('dense0', [256, 512, 1024, 2048])
+        space['conv_kind'] = hp.choice('conv_kind', ['standard', 'seperable'])
         return space
 
     def data_locators(self) -> List[Any]:
