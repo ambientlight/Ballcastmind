@@ -5,11 +5,10 @@ from models.inception_test import InceptionTest
 
 # from keras.utils import plot_model
 
-# initial_7heads = Conv2dMaxpool5xDenseHeads1(name='Conv_2d_Maxpool5x_Dense_Heads1', model_dir_path='./data/output')
-# initial_7heads.create_model().summary()
-#
-# validation_score = initial_7heads.train_prod(epoch=100)
+model = Conv2dMaxpool5xDenseHeads1(name='Conv_2d_Maxpool5x_Dense_Heads1', model_dir_path='./data/output')
+model.create_model().summary()
+model.train_prod(epoch=100)
 
-inception = InceptionTest(name='Inception_Test', model_dir_path='./data/output')
-inception.create_model().summary()
-inception.train_prod(epoch=100)
+# inception = InceptionTest(name='Inception_Test', model_dir_path='./data/output')
+# inception.create_model().summary()
+# inception.train_prod(epoch=100)

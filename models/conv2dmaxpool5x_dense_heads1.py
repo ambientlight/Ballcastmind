@@ -21,7 +21,8 @@ sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
 class Conv2dMaxpool5xDenseHeads1(ModelDescriptor):
-    _version = 8
+    _version = 9
+    _miniBatchSize = 32
 
     def __init__(self, name: str, model_dir_path: str):
         super().__init__(name, model_dir_path)
@@ -76,19 +77,13 @@ class Conv2dMaxpool5xDenseHeads1(ModelDescriptor):
                 rot_x_pred = layers.Dense(1, name='rot_x')(x)
 
         else:
-            img_input = Input(shape=(640, 400, 3), dtype='float32')
-            x = layers.SeparableConv2D(32, 5, activation='relu')(img_input)
-            x = layers.MaxPooling2D(2)(x)
-            x = layers.SeparableConv2D(64, 5, activation='relu')(x)
-            x = layers.MaxPooling2D(2)(x)
-            x = layers.SeparableConv2D(128, 5, activation='relu')(x)
-            x = layers.MaxPooling2D(2)(x)
-            x = layers.SeparableConv2D(128, 5, activation='relu')(x)
-            x = layers.MaxPooling2D(2)(x)
-            x = layers.SeparableConv2D(128, 5, activation='relu')(x)
-            x = layers.MaxPooling2D(2)(x)
+            img_input = Input(shape=(1384, 865, 3), dtype='float32')
+            x = layers.SeparableConv2D(256, 20, strides=(10, 10), activation='relu')(img_input)
+            x = layers.SeparableConv2D(512, 7, strides=(2, 2), activation='relu')(x)
+            x = layers.SeparableConv2D(1024, 7, strides=(2, 2), activation='relu')(x)
+            x = layers.SeparableConv2D(1024, 7, strides=(2, 2), activation='relu')(x)
             x = layers.Flatten()(x)
-            x = layers.Dense(4096, activation='relu')(x)
+            x = layers.Dense(128, activation='relu')(x)
             rot_x_pred = layers.Dense(1, name='rot_x')(x)
 
         model = Model(img_input, rot_x_pred)
@@ -123,7 +118,7 @@ class Conv2dMaxpool5xDenseHeads1(ModelDescriptor):
         # output dimentions for x
         # (batchsize, width, height, channels)
         # (16, 640, 400, 3)
-        target_size = (640, 400)
+        target_size = (1384, 865)
         epoch = 0
 
         while 1:
