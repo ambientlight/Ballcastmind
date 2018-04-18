@@ -21,7 +21,7 @@ sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
 class SeperableConv2d4xDenseHead1(ModelDescriptor):
-    _version = 4
+    _version = 5
     _miniBatchSize = 32
 
     def __init__(self, name: str, model_dir_path: str):
@@ -44,7 +44,7 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
         rot_y_pred = layers.Dense(1, name='rot_y')(x)
 
         model = Model(img_input, rot_y_pred)
-        model.compile(optimizer='rmsprop',
+        model.compile(optimizer='adam',
                       loss='mse',
                       metrics=['mae'])
         return model
@@ -81,10 +81,10 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
                 batch_frame_samples = target_samples[read_count: read_count + batch_size]
                 xs = numpy.array([self.frame_sample_load_image(frame_sample, target_size)
                                   for frame_sample in batch_frame_samples])
-                rot_ys = numpy.array([frame_sample.camera.rotation.y for frame_sample
+                rot_xs = numpy.array([frame_sample.camera.rotation.x for frame_sample
                                       in batch_frame_samples])
                 read_count += batch_size
-                yield (xs, rot_ys)
+                yield (xs, rot_xs)
 
     @staticmethod
     def frame_sample_load_image(frame_sample, target_size):
