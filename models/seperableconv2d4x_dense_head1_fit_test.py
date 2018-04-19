@@ -16,7 +16,7 @@ from src.threadsafe_generator import threadsafe_generator
 
 data_directory_path = './data'
 sample_name = '10_min_sample'
-sample_id = 'cebd5588-926b-486b-8add-bbe1e74a1226_v2'
+sample_id = 'fit_test'
 sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
