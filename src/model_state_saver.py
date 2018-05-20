@@ -40,8 +40,8 @@ class ModelStateSaver(Callback):
             print(json.dumps(self.history), file=json_file)
         self.training_state.save_to_file(training_state_path)
 
-        if 'loss' in self.history:
-            losses = self.history['loss']
+        if 'val_loss' in self.history or 'loss' in self.history:
+            losses = self.history['val_loss'] if 'val_loss' in self.history else self.history['loss']
             if losses and len(losses) > 0:
                 current_loss = losses[-1]
                 if (self.best_loss is not None and current_loss < self.best_loss) or self.best_loss is None:

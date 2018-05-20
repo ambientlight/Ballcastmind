@@ -15,7 +15,7 @@ images = numpy.array([model_descriptor.frame_sample_load_image(frame_sample, tar
 
 rot_x_model_path = './data/model_extracts/rot_x_model_ep92_s1.h5'
 rot_y_model_path = './data/model_extracts/rot_y_model_ep93_s1.h5'
-rot_z_model_path = './data/model_extracts/rot_z_model_ep47_s1.h5'
+rot_z_model_path = './data/model_extracts/rot_z_model_ep93_s1.h5'
 rot_x_model: Model = load_model(rot_x_model_path)
 rot_y_model: Model = load_model(rot_y_model_path)
 rot_z_model: Model = load_model(rot_z_model_path)

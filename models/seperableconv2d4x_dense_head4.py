@@ -20,8 +20,8 @@ sample_id = 'cebd5588-926b-486b-8add-bbe1e74a1226_v2'
 sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
-class SeperableConv2d4xDenseHead1(ModelDescriptor):
-    _version = 5
+class SeperableConv2d4xDenseHead4(ModelDescriptor):
+    _version = 6
     _miniBatchSize = 32
 
     def __init__(self, name: str, model_dir_path: str):
@@ -36,16 +36,26 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
 
         img_input = Input(shape=(1384, 865, 3), dtype='float32')
         x = layers.SeparableConv2D(256, 20, strides=(10, 10), activation='relu')(img_input)
+        x = layers.Dropout(0.5)(x)
         x = layers.SeparableConv2D(512, 7, strides=(2, 2), activation='relu')(x)
+        x = layers.Dropout(0.5)(x)
         x = layers.SeparableConv2D(1024, 7, strides=(2, 2), activation='relu')(x)
+        x = layers.Dropout(0.5)(x)
         x = layers.SeparableConv2D(1024, 7, strides=(2, 2), activation='relu')(x)
+        x = layers.Dropout(0.5)(x)
         x = layers.Flatten()(x)
         x = layers.Dense(128, activation='relu')(x)
+        rot_x_pred = layers.Dense(1, name='rot_x')(x)
         rot_y_pred = layers.Dense(1, name='rot_y')(x)
+        rot_z_pred = layers.Dense(1, name='rot_z')(x)
+        fov_pred = layers.Dense(1, name='fov')(x)
 
-        model = Model(img_input, rot_y_pred)
+        model = Model(img_input, [rot_x_pred, rot_y_pred, rot_z_pred, fov_pred])
         model.compile(optimizer='adam',
-                      loss='mse',
+                      loss={'rot_x': 'mse',
+                            'rot_y': 'mse',
+                            'rot_z': 'mse',
+                            'fov': 'mse'},
                       metrics=['mae'])
         return model
 
@@ -81,10 +91,12 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
                 batch_frame_samples = target_samples[read_count: read_count + batch_size]
                 xs = numpy.array([self.frame_sample_load_image(frame_sample, target_size)
                                   for frame_sample in batch_frame_samples])
-                fovs = numpy.array([frame_sample.camera.fov for frame_sample
-                                      in batch_frame_samples])
+                rot_xs = numpy.array([frame_sample.camera.rotation.x for frame_sample in batch_frame_samples])
+                rot_ys = numpy.array([frame_sample.camera.rotation.y for frame_sample in batch_frame_samples])
+                rot_zs = numpy.array([frame_sample.camera.rotation.z for frame_sample in batch_frame_samples])
+                fovs = numpy.array([frame_sample.camera.fov for frame_sample in batch_frame_samples])
                 read_count += batch_size
-                yield (xs, fovs)
+                yield (xs, [rot_xs, rot_ys, rot_zs, fovs])
 
     @staticmethod
     def frame_sample_load_image(frame_sample, target_size):
