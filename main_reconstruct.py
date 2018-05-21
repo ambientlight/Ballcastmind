@@ -10,12 +10,10 @@ import numpy as np
 from math import sin, cos
 from math import radians
 
-from reconstruct.core import project
+from reconstruct.core import project, linear_parameters, cut_off_line, buffer, get_perp_coord
 from reconstruct.perspective_camera import PerspectiveCamera
-from reconstruct.quaternion import Quaternion
-from reconstruct.matrix4 import Matrix4
 
-
+SEARCH_WINDOW_CORNER_CUTOFF = 0.05
 METER_TO_YARD_MULT = 1.093613298337708
 
 data_directory_path = './data'
@@ -77,7 +75,7 @@ coords = np.array([np.array([[coord_tuple[0], coord_tuple[1]], [coord_tuple[2], 
 # using center line dimentions readjust the coordinate system to start from field center
 cl_coords = coords[len(coords)-1]
 center = [cl_coords[0][0], cl_coords[1][1] / 2]
-print(f'Center: {center}')
+# print(f'Center: {center}')
 coords = coords - center
 
 # divide by svg-model yard scaling factor
@@ -102,22 +100,44 @@ camera.rotation = np.array([
     radians(last_frame_data.camera.rotation.y),
     radians(last_frame_data.camera.rotation.z)])
 
-point = np.array([
+p1 = np.array([
     line_dict['L-16y-Right'][0][0],
     line_dict['L-16y-Right'][0][1],
-    0.
-], dtype=np.float32)
+    0.], dtype=np.float32)
+p2 = np.array([
+    line_dict['L-16y-Right'][1][0],
+    line_dict['L-16y-Right'][1][1],
+    0.], dtype=np.float32)
 
-print(project(
-    point,
+p1_proj = project(
+    p1,
     camera,
     last_frame_data.canvasSize.width,
-    last_frame_data.canvasSize.height))
+    last_frame_data.canvasSize.height)
+p2_proj = project(
+    p2,
+    camera,
+    last_frame_data.canvasSize.width,
+    last_frame_data.canvasSize.height)
 
+line = cut_off_line(np.array([p1_proj, p2_proj]), SEARCH_WINDOW_CORNER_CUTOFF)
+line = line.astype(int)
+cv2.line(frame_image,
+         (line[0][0], line[0][1]),
+         (line[1][0], line[1][1]),
+         (0, 0, 255), 2)
+
+
+line = get_perp_coord(line, 50)
+line = line.astype(int)
+cv2.line(frame_image,
+         (line[0][0], line[0][1]),
+         (line[1][0], line[1][1]),
+         (0, 0, 255), 2)
 
 # plot frame_image
-# plt.imshow(frame_image)
-# plt.title('Frame Image')
-# plt.xticks([])
-# plt.yticks([])
-# plt.show()
+plt.imshow(frame_image)
+plt.title('Frame Image')
+plt.xticks([])
+plt.yticks([])
+plt.show()
