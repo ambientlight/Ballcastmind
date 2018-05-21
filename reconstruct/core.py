@@ -7,14 +7,7 @@ from reconstruct.matrix4 import Matrix4
 
 def project(vector: ndarray, camera: PerspectiveCamera, width: int, height: int):
     matrix = Matrix4()
-    # wtf is here: should be the following
-    # np.dot(camera.projection_matrix.value, inv(camera.matrix.value))
-
-    # camera.projection_matrix.value[0][0] = 8.624822915037795
-    matrix.multiple_matrices(
-        camera.projection_matrix.value,
-        inv(camera.matrix.value)
-    )
+    matrix.value = np.dot(inv(camera.matrix.value), camera.projection_matrix.value)
 
     target = vector.copy()
     x = target[0]

@@ -116,8 +116,8 @@ print(project(
 
 
 # plot frame_image
-plt.imshow(frame_image)
-plt.title('Frame Image')
-plt.xticks([])
-plt.yticks([])
-plt.show()
+# plt.imshow(frame_image)
+# plt.title('Frame Image')
+# plt.xticks([])
+# plt.yticks([])
+# plt.show()
