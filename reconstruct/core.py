@@ -62,37 +62,30 @@ def cut_off_line(line: ndarray, cutoff: float):
     ])
 
 
-def get_perp_coord(line: ndarray, d: float):
-    s = line[1] - line[0]
-
-    vX = s[0]
-    vY = s[1]
-
-    if vX == 0 or vY == 0:
-        return 0, 0, 0, 0
-
-    mag = sqrt(vX*vX + vY*vY)
-    vX = vX / mag
-    vY = vY / mag
-    temp = vX
-    vX = 0-vY
-    vY = temp
-    cX = line[0][0] + vX * d
-    cY = line[0][1] + vY * d
-    dX = line[0][0] - vX * d
-    dY = line[0][1] - vY * d
-    return np.array([
-        [cX, cY],
-        [dX, dY]
-    ])
-
-
 # https://math.stackexchange.com/questions/2043054/find-a-point-on-a-perpendicular-line-a-given-distance-from-another-point
-def buffer(line: ndarray, d: float):
+def buffer_lines(line: ndarray, d: float):
     m, c = linear_parameters(line[0], line[1])
     factor = sqrt((d * d) / (1 + 1 / (m * m)))
-    x1 = line[0][0] + factor
-    x2 = line[0][0] - factor
+    x3 = line[0][0] + factor
+    x4 = line[0][0] - factor
+    x5 = line[1][0] + factor
+    x6 = line[1][0] - factor
 
-    # y = y2 - (1/m) * (x - x2)
-    # y - y3 = - (1/m) * (x - x3)
+    x1 = line[0][0]
+    y1 = line[0][1]
+    x2 = line[1][0]
+    y2 = line[1][1]
+    m_per = - 1/m
+
+    # y1 = m_per * x1 + b
+    c_per = y1 - m_per * x1
+    c_per2 = y2 - m_per * x2
+
+    y_p1 = m_per * np.array([x3, x4]) + c_per
+    y_p2 = m_per * np.array([x5, x6]) + c_per2
+    return np.array([
+        [x3, y_p1[0]],
+        [x4, y_p1[1]],
+        [x6, y_p2[1]],
+        [x5, y_p2[0]]
+    ])
