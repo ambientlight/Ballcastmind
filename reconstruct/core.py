@@ -62,6 +62,10 @@ def cut_off_line(line: ndarray, cutoff: float):
     ])
 
 
+def angle_with_horizon(line: ndarray):
+    return np.rad2deg(np.arctan2(line[0][1] - line[1][1], line[1][0] - line[0][0]))
+
+
 # https://math.stackexchange.com/questions/2043054/find-a-point-on-a-perpendicular-line-a-given-distance-from-another-point
 def buffer_lines(line: ndarray, d: float):
     m, c = linear_parameters(line[0], line[1])

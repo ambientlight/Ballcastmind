@@ -10,7 +10,7 @@ import numpy as np
 from math import sin, cos
 from math import radians
 
-from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines
+from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines, angle_with_horizon
 from reconstruct.perspective_camera import PerspectiveCamera
 
 SEARCH_WINDOW_CORNER_CUTOFF = 0.05
@@ -102,7 +102,8 @@ camera.rotation = np.array([
     radians(last_frame_data.camera.rotation.z)])
 
 overlay = np.empty(frame_image.shape, np.uint8)
-for line_id in line_ids:
+line_search_mask = np.empty((frame_image.shape[0], frame_image.shape[1]), np.uint8)
+for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_ids):
     p1 = np.array([
         line_dict[line_id][0][0],
         line_dict[line_id][0][1],
@@ -123,13 +124,25 @@ for line_id in line_ids:
         last_frame_data.canvasSize.width,
         last_frame_data.canvasSize.height)
 
-    line = cut_off_line(np.array([p1_proj, p2_proj]), SEARCH_WINDOW_CORNER_CUTOFF)
+    projected = np.array([p1_proj, p2_proj])
+    print(projected)
+    print(angle_with_horizon(projected))
+    line = cut_off_line(projected, SEARCH_WINDOW_CORNER_CUTOFF)
     lines = buffer_lines(line, SEARCH_WINDOW_RADIUS).astype(np.int32)
     lines = lines.reshape((-1, 1, 2))
-    cv2.polylines(overlay, [lines], True, (0, 0, 255))
+    # cv2.polylines(overlay, [lines], True, (0, 0, 255))
     cv2.fillPoly(overlay, [lines], (0, 0, 255))
+    # print(cv2.pointPolygonTest(lines, (812, 569), False))
+    cv2.fillPoly(line_search_mask, [lines], (255, 255, 255))
 
 frame_image = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
+# frame_image = cv2.bitwise_and(frame_image, frame_image, mask=mask)
+
+hsv_frame = cv2.cvtColor(frame_image, cv2.COLOR_BGR2HSV)
+lower_grass_green = np.array([40, 40, 40])
+upper_grass_green = np.array([80, 200, 180])
+grass_mask = cv2.inRange(hsv_frame, lower_grass_green, upper_grass_green)
+frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
 
 # plot frame_image
 plt.imshow(frame_image)
