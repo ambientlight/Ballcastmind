@@ -9,6 +9,7 @@ import re
 import numpy as np
 from math import sin, cos
 from math import radians
+from time import time
 
 from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines, line_orientation_is_vertical
 from reconstruct.perspective_camera import PerspectiveCamera
@@ -140,13 +141,28 @@ for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_
     cv2.fillPoly(line_search_mask, [lines], (255, 255, 255))
 
 # frame_image = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
-# frame_image = cv2.bitwise_and(frame_image, frame_image, mask=mask)
+# frame_image = cv2.bitwise_and(frame_image, frame_image, mask=line_search_mask)
 
 hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
 grass_mask = cv2.inRange(hsv_frame, LOWER_GRASS_GREEN, UPPER_GRASS_GREEN)
 grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
 
-line_filter(frame_image, line_search_mask, True)
+filtered_lines_mask = line_filter(
+    grass_only_frame_image,
+    line_search_mask,
+    grass_mask,
+    15)
+
+hough_start_time = time()
+lines = cv2.HoughLinesP(filtered_lines_mask, rho=1, theta=np.pi/180, threshold=150,
+                        minLineLength=175,
+                        maxLineGap=20)
+print(f'hough_lines_p: {(time() - hough_start_time) * 1000} ms')
+print(f'Line count: {len(lines)}')
+
+for line in lines:
+    for x1, y1, x2, y2 in line:
+        cv2.line(frame_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
 # plot frame_image
 plt.imshow(frame_image)
@@ -154,3 +170,9 @@ plt.title('Frame Image')
 plt.xticks([])
 plt.yticks([])
 plt.show()
+
+# ax1 = fig.add_subplot(2,1,1)
+# ax1.imshow(target)
+# ax2 = fig.add_subplot(2,1,2)
+# ax2.imshow(frame_image)
+# plt.show()
