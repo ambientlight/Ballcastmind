@@ -10,12 +10,16 @@ import numpy as np
 from math import sin, cos
 from math import radians
 
-from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines, angle_with_horizon
+from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines, line_orientation_is_vertical
 from reconstruct.perspective_camera import PerspectiveCamera
+from reconstruct.image_tools import line_filter
 
 SEARCH_WINDOW_CORNER_CUTOFF = 0.05
 METER_TO_YARD_MULT = 1.093613298337708
 SEARCH_WINDOW_RADIUS = 40
+LOWER_GRASS_GREEN = np.array([40, 40, 40])
+UPPER_GRASS_GREEN = np.array([80, 200, 180])
+
 
 data_directory_path = './data'
 sample_name = '10_min_sample'
@@ -125,8 +129,8 @@ for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_
         last_frame_data.canvasSize.height)
 
     projected = np.array([p1_proj, p2_proj])
-    print(projected)
-    print(angle_with_horizon(projected))
+    print(f'{line_id}: {line_orientation_is_vertical(projected)}')
+
     line = cut_off_line(projected, SEARCH_WINDOW_CORNER_CUTOFF)
     lines = buffer_lines(line, SEARCH_WINDOW_RADIUS).astype(np.int32)
     lines = lines.reshape((-1, 1, 2))
@@ -135,14 +139,14 @@ for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_
     # print(cv2.pointPolygonTest(lines, (812, 569), False))
     cv2.fillPoly(line_search_mask, [lines], (255, 255, 255))
 
-frame_image = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
+# frame_image = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
 # frame_image = cv2.bitwise_and(frame_image, frame_image, mask=mask)
 
-hsv_frame = cv2.cvtColor(frame_image, cv2.COLOR_BGR2HSV)
-lower_grass_green = np.array([40, 40, 40])
-upper_grass_green = np.array([80, 200, 180])
-grass_mask = cv2.inRange(hsv_frame, lower_grass_green, upper_grass_green)
-frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
+hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
+grass_mask = cv2.inRange(hsv_frame, LOWER_GRASS_GREEN, UPPER_GRASS_GREEN)
+grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
+
+line_filter(frame_image, line_search_mask, True)
 
 # plot frame_image
 plt.imshow(frame_image)

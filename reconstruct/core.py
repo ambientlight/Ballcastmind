@@ -62,10 +62,6 @@ def cut_off_line(line: ndarray, cutoff: float):
     ])
 
 
-def angle_with_horizon(line: ndarray):
-    return np.rad2deg(np.arctan2(line[0][1] - line[1][1], line[1][0] - line[0][0]))
-
-
 # https://math.stackexchange.com/questions/2043054/find-a-point-on-a-perpendicular-line-a-given-distance-from-another-point
 def buffer_lines(line: ndarray, d: float):
     m, c = linear_parameters(line[0], line[1])
@@ -93,3 +89,9 @@ def buffer_lines(line: ndarray, d: float):
         [x6, y_p2[1]],
         [x5, y_p2[0]]
     ])
+
+
+# whether line is closer to vertical orientation
+def line_orientation_is_vertical(line: ndarray) -> bool:
+    angle_with_horizon = np.arctan2(line[0][1] - line[1][1], line[1][0] - line[0][0])
+    return np.sin(angle_with_horizon) > 0.5
