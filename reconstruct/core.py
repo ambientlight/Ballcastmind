@@ -41,7 +41,7 @@ def linear_parameters(p1: ndarray, p2: ndarray):
     return m, c
 
 
-def cut_off_line(line: ndarray, cutoff: float):
+def cut_off_line(line: ndarray, cutoff: int):
     p1 = line[0]
     p2 = line[1]
 
@@ -50,8 +50,8 @@ def cut_off_line(line: ndarray, cutoff: float):
 
     # cut of the SEARCH_WINDOW_CORNER_CUTOFF from lines
     # to make sure corners are not included
-    x1 = p1[0] + x_dist * cutoff
-    x2 = p1[0] + x_dist * (1 - cutoff)
+    x1 = p1[0] + cutoff
+    x2 = p1[0] + x_dist - cutoff
     y1 = m * x1 + c
     y2 = m * x2 + c
 

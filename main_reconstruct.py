@@ -15,7 +15,7 @@ from reconstruct.core import project, linear_parameters, cut_off_line, buffer_li
 from reconstruct.perspective_camera import PerspectiveCamera
 from reconstruct.image_tools import line_filter
 
-SEARCH_WINDOW_CORNER_CUTOFF = 0.05
+SEARCH_WINDOW_CORNER_CUTOFF = 20
 METER_TO_YARD_MULT = 1.093613298337708
 SEARCH_WINDOW_RADIUS = 40
 LOWER_GRASS_GREEN = np.array([40, 40, 40])
@@ -61,6 +61,10 @@ line_ids = [
     'R-16y-Top',
     'R-6y-Right',
     'R-6y-Top',
+    'R-GL',
+    'L-GL',
+    'SL-Top',
+    'SL-Bottom',
     'CL'
 ]
 
@@ -129,7 +133,7 @@ for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_
         last_frame_data.canvasSize.width,
         last_frame_data.canvasSize.height)
 
-    projected = np.array([p1_proj, p2_proj])
+    projected = np.array([p1_proj, p2_proj], dtype=np.int32)
     print(f'{line_id}: {line_orientation_is_vertical(projected)}')
 
     line = cut_off_line(projected, SEARCH_WINDOW_CORNER_CUTOFF)
@@ -140,7 +144,7 @@ for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_
     # print(cv2.pointPolygonTest(lines, (812, 569), False))
     cv2.fillPoly(line_search_mask, [lines], (255, 255, 255))
 
-# frame_image = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
+frame_image_line_space = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
 # frame_image = cv2.bitwise_and(frame_image, frame_image, mask=line_search_mask)
 
 hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
@@ -155,17 +159,17 @@ filtered_lines_mask = line_filter(
 
 hough_start_time = time()
 lines = cv2.HoughLinesP(filtered_lines_mask, rho=1, theta=np.pi/180, threshold=150,
-                        minLineLength=175,
+                        minLineLength=150,
                         maxLineGap=20)
 print(f'hough_lines_p: {(time() - hough_start_time) * 1000} ms')
 print(f'Line count: {len(lines)}')
 
 for line in lines:
     for x1, y1, x2, y2 in line:
-        cv2.line(frame_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+        cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
 # plot frame_image
-plt.imshow(frame_image)
+plt.imshow(frame_image_line_space)
 plt.title('Frame Image')
 plt.xticks([])
 plt.yticks([])

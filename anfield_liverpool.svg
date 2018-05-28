@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1100px" height="740px" viewBox="0 0 1100 740" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" style="background: #5D9536;">
+    <!-- Generator: Sketch 43.2 (39069) - http://www.bohemiancoding.com/sketch -->
+    <title>model</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd" stroke-linecap="square">
+        <g id="model" stroke="#FFFFFF">
+            <path d="M0,590 L180,590" id="L-16y-Bottom" stroke-width="1.132"></path>
+            <path d="M180,150 L180,590" id="L-16y-Right" stroke-width="1.132"></path>
+            <path d="M0,150 L180,150" id="L-16y-Top" stroke-width="1.132"></path>
+            <path d="M60,270 L60,470" id="L-6y-Right" stroke-width="1.132"></path>
+            <path d="M0,470 L60,470" id="L-6y-Bottom" stroke-width="1.132"></path>
+            <path d="M0,270 L60,270" id="L-6y-Top" stroke-width="1.132"></path>
+            <path d="M920,590 L1100,590" id="R-16y-Bottom" stroke-width="1.132" transform="translate(1010.000000, 590.000000) scale(-1, 1) translate(-1010.000000, -590.000000) "></path>
+            <path d="M920,150 L920,590" id="R-16y-Right" stroke-width="1.132" transform="translate(920.000000, 370.000000) scale(-1, 1) translate(-920.000000, -370.000000) "></path>
+            <path d="M920,150 L1100,150" id="R-16y-Top" stroke-width="1.132" transform="translate(1010.000000, 150.000000) scale(-1, 1) translate(-1010.000000, -150.000000) "></path>
+            <path d="M1040,270 L1040,470" id="R-6y-Right" stroke-width="1.132" transform="translate(1040.000000, 370.000000) scale(-1, 1) translate(-1040.000000, -370.000000) "></path>
+            <path d="M1040,470 L1100,470" id="R-6y-Bottom" stroke-width="1.132" transform="translate(1070.000000, 470.000000) scale(-1, 1) translate(-1070.000000, -470.000000) "></path>
+            <path d="M1040,270 L1100,270" id="R-6y-Top" stroke-width="1.132" transform="translate(1070.000000, 270.000000) scale(-1, 1) translate(-1070.000000, -270.000000) "></path>
+            <path d="M550,0 L550,740" id="CL" stroke-width="1.312"></path>
+            <path d="M1100,0 L1100,740" id="R-GL" stroke="#FFFFFF" stroke-width="1.132"></path>
+            <path d="M0,0 L0,740" id="L-GL" stroke="#FFFFFF" stroke-width="1.132"></path>
+            <path d="M0,0 L1100,0" id="SL-Top" stroke="#979797" stroke-width="1.132"></path>
+            <path d="M0,740 L1100,740" id="SL-Bottom" stroke="#979797" stroke-width="1.132"></path>
+        </g>
+    </g>
+</svg>
