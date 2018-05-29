@@ -1,4 +1,5 @@
 from types import SimpleNamespace as Namespace
+from typing import List, Dict, Any, Tuple
 from os.path import isfile
 import json
 import cv2
@@ -93,9 +94,6 @@ coords = coords / 10.0
 # convert to meters
 coords = coords / METER_TO_YARD_MULT
 
-# print(coords)
-# print(coords.shape)
-
 line_dict = {}
 for index, line_name in enumerate(line_ids):
     line_dict[line_name] = coords[index]
@@ -112,37 +110,27 @@ camera.rotation = np.array([
 
 overlay = np.empty(frame_image.shape, np.uint8)
 line_search_mask = np.empty((frame_image.shape[0], frame_image.shape[1]), np.uint8)
-for line_id in line_ids: #filter(lambda line_id: line_id == 'L-16y-Right', line_ids):
-    p1 = np.array([
-        line_dict[line_id][0][0],
-        line_dict[line_id][0][1],
-        0.], dtype=np.float32)
-    p2 = np.array([
-        line_dict[line_id][1][0],
-        line_dict[line_id][1][1],
-        0.], dtype=np.float32)
-
-    p1_proj = project(
-        p1,
-        camera,
-        last_frame_data.canvasSize.width,
-        last_frame_data.canvasSize.height)
-    p2_proj = project(
-        p2,
-        camera,
-        last_frame_data.canvasSize.width,
-        last_frame_data.canvasSize.height)
+line_dicts: List[Dict[str, Any]] = []
+for line_id in line_ids:
+    p1 = np.array([line_dict[line_id][0][0], line_dict[line_id][0][1], 0.], dtype=np.float32)
+    p2 = np.array([line_dict[line_id][1][0], line_dict[line_id][1][1], 0.], dtype=np.float32)
+    p1_proj = project(p1, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+    p2_proj = project(p2, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
 
     projected = np.array([p1_proj, p2_proj], dtype=np.int32)
-    print(f'{line_id}: {line_orientation_is_vertical(projected)}')
-
     line = cut_off_line(projected, SEARCH_WINDOW_CORNER_CUTOFF)
     lines = buffer_lines(line, SEARCH_WINDOW_RADIUS).astype(np.int32)
-    lines = lines.reshape((-1, 1, 2))
-    # cv2.polylines(overlay, [lines], True, (0, 0, 255))
-    cv2.fillPoly(overlay, [lines], (0, 0, 255))
-    # print(cv2.pointPolygonTest(lines, (812, 569), False))
-    cv2.fillPoly(line_search_mask, [lines], (255, 255, 255))
+    reshaped_lines = lines.reshape((-1, 1, 2))
+    cv2.fillPoly(overlay, [reshaped_lines], (0, 0, 255))
+    cv2.fillPoly(line_search_mask, [reshaped_lines], (255, 255, 255))
+
+    line_dicts.append({
+        'projected': projected,
+        'reduced_projected': line,
+        'buffer_contour': lines.reshape((-1, 1, 2)),
+        'id': line_id,
+        'orientation': line_orientation_is_vertical(projected)
+    })
 
 frame_image_line_space = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
 # frame_image = cv2.bitwise_and(frame_image, frame_image, mask=line_search_mask)
@@ -158,15 +146,37 @@ filtered_lines_mask = line_filter(
     15)
 
 hough_start_time = time()
-lines = cv2.HoughLinesP(filtered_lines_mask, rho=1, theta=np.pi/180, threshold=150,
-                        minLineLength=150,
-                        maxLineGap=20)
+lines: List[List[Tuple[int, int, int, int]]] = cv2.HoughLinesP(
+    filtered_lines_mask,
+    rho=1, theta=np.pi/180, threshold=150, minLineLength=150, maxLineGap=20
+)
 print(f'hough_lines_p: {(time() - hough_start_time) * 1000} ms')
 print(f'Line count: {len(lines)}')
 
 for line in lines:
     for x1, y1, x2, y2 in line:
         cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+group_by_buffer_start_time = time()
+for line_dict in line_dicts:
+    reshaped_lines = line_dict['buffer_contour']
+    match_idxs = []
+    for line_index, line in enumerate(lines):
+        x1, y1, x2, y2 = line[0]
+        if cv2.pointPolygonTest(reshaped_lines, (x1, y1), False) == 1 and \
+           cv2.pointPolygonTest(reshaped_lines, (x2, y2), False) == 1:
+            match_idxs.append(line_index)
+
+    line_dict['extracted'] = []
+    if len(match_idxs) > 0:
+        line_dict['extracted'] = np.array([
+            [[lines[idx][0][0], lines[idx][0][1]],
+             [lines[idx][0][2], lines[idx][0][3]]] for idx in match_idxs], dtype=np.int32)
+        # remove extracted lines from the list
+        lines = [line for line_index, line in enumerate(lines) if line_index not in match_idxs]
+    print(f'{line_dict["id"]}: {len(line_dict["extracted"])}')
+
+print(f'group_by_buffer: {(time() - group_by_buffer_start_time) * 1000} ms')
 
 # plot frame_image
 plt.imshow(frame_image_line_space)
