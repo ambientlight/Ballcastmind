@@ -69,6 +69,7 @@ line_ids = [
     'CL'
 ]
 
+parse_start_time = time()
 pitch_name = 'anfield_liverpool'
 pitch_model_path = f'{data_directory_path}/pitch_models/{pitch_name}.svg'
 svg_root = ElementTree.parse(pitch_model_path).getroot()
@@ -82,7 +83,9 @@ coord_lines_tuples = [re.search('M(\d+),(\d+)\s+L(\d+),(\d+)', line_d_attrib).gr
 
 coords = np.array([np.array([[coord_tuple[0], coord_tuple[1]], [coord_tuple[2], coord_tuple[3]]])
                    for coord_tuple in coord_lines_tuples], dtype=np.float32)
+print(f'parse: {(time() - parse_start_time) * 1000} ms')
 
+proj_start_time = time()
 # using center line dimentions readjust the coordinate system to start from field center
 cl_coords = coords[len(coords)-1]
 center = [cl_coords[0][0], cl_coords[1][1] / 2]
@@ -139,6 +142,8 @@ hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
 grass_mask = cv2.inRange(hsv_frame, LOWER_GRASS_GREEN, UPPER_GRASS_GREEN)
 grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
 
+print(f'proj_fill: {(time() - proj_start_time) * 1000} ms')
+
 filtered_lines_mask = line_filter(
     grass_only_frame_image,
     line_search_mask,
@@ -151,8 +156,8 @@ lines: List[List[Tuple[int, int, int, int]]] = cv2.HoughLinesP(
     rho=1, theta=np.pi/180, threshold=150, minLineLength=150, maxLineGap=20
 )
 print(f'hough_lines_p: {(time() - hough_start_time) * 1000} ms')
-print(f'Line count: {len(lines)}')
 
+# print(f'Line count: {len(lines)}')
 for line in lines:
     for x1, y1, x2, y2 in line:
         cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
@@ -163,8 +168,11 @@ for line_dict in line_dicts:
     match_idxs = []
     for line_index, line in enumerate(lines):
         x1, y1, x2, y2 = line[0]
-        if cv2.pointPolygonTest(reshaped_lines, (x1, y1), False) == 1 and \
-           cv2.pointPolygonTest(reshaped_lines, (x2, y2), False) == 1:
+        p1_res = cv2.pointPolygonTest(reshaped_lines, (x1, y1), True)
+        p2_res = cv2.pointPolygonTest(reshaped_lines, (x2, y2), True)
+
+        # print(f'{line_dict["id"]}: {p1_res}, {p2_res}')
+        if (p1_res > -30) and (p2_res > -30):
             match_idxs.append(line_index)
 
     line_dict['extracted'] = []
@@ -174,7 +182,8 @@ for line_dict in line_dicts:
              [lines[idx][0][2], lines[idx][0][3]]] for idx in match_idxs], dtype=np.int32)
         # remove extracted lines from the list
         lines = [line for line_index, line in enumerate(lines) if line_index not in match_idxs]
-    print(f'{line_dict["id"]}: {len(line_dict["extracted"])}')
+
+    # print(f'{line_dict["id"]}: {len(line_dict["extracted"])}')
 
 print(f'group_by_buffer: {(time() - group_by_buffer_start_time) * 1000} ms')
 
