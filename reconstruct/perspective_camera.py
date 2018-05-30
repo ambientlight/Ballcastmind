@@ -92,6 +92,7 @@ class PerspectiveCamera:
         target = self.copy()
         target.fov = fov
         target.update_projection_matrix()
+        return target
 
     def get_film_width(self):
         return self.film_gauge * min(self.aspect, 1)

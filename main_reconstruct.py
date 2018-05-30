@@ -12,6 +12,7 @@ from numpy import ndarray
 from math import sin, cos
 from math import radians
 from time import time
+from numpy.linalg import lstsq
 
 from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines, line_orientation_is_vertical, \
     point_infinite_line_distance
@@ -47,42 +48,42 @@ def dist(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCa
     projected_line = np.array([
         project(unprojected_line[0], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height),
         project(unprojected_line[1], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
-    ], dtype=np.int32)
+    ], dtype=np.float64)
     return point_infinite_line_distance(target_point, projected_line)
 
 
 def ddist_dtheta_x(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
-    h = 1e-5
+    h = 1e-6
     cam1 = camera.copy()
     cam2 = camera.copy()
     cam1.rotation = np.array([cam1.rotation[0] + h, cam1.rotation[1], cam1.rotation[2]])
     cam2.rotation = np.array([cam1.rotation[0] - h, cam1.rotation[1], cam1.rotation[2]])
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / 2 * h
+    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
 
 
 def ddist_dtheta_y(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
-    h = 1e-5
+    h = 1e-6
     cam1 = camera.copy()
     cam2 = camera.copy()
     cam1.rotation = np.array([cam1.rotation[0], cam1.rotation[1] + h, cam1.rotation[2]])
     cam2.rotation = np.array([cam1.rotation[0], cam1.rotation[1] - h, cam1.rotation[2]])
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / 2 * h
+    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
 
 
 def ddist_dtheta_z(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
-    h = 1e-5
+    h = 1e-6
     cam1 = camera.copy()
     cam2 = camera.copy()
     cam1.rotation = np.array([cam1.rotation[0], cam1.rotation[1], cam1.rotation[2] + h])
     cam2.rotation = np.array([cam1.rotation[0], cam1.rotation[1], cam1.rotation[2] - h])
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / 2 * h
+    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
 
 
 def ddist_dfov(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
-    h = 1e-5
+    h = 1e-6
     cam1 = camera.with_new_fov(camera.fov + h)
     cam2 = camera.with_new_fov(camera.fov - h)
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / 2 * h
+    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
 
 
 last_frame_data = read_regular_frame_data()[-1]
@@ -173,6 +174,7 @@ for line_id in line_ids:
     cv2.fillPoly(line_search_mask, [reshaped_lines], (255, 255, 255))
 
     line_dicts.append({
+        'original': np.array([p1, p2]),
         'projected': projected,
         'reduced_projected': line,
         'buffer_contour': lines.reshape((-1, 1, 2)),
@@ -238,11 +240,50 @@ for line_dict in line_dicts:
 
 print(f'group_by_buffer: {(time() - group_by_buffer_start_time) * 1000} ms')
 
+A_rows = []
+bs = []
 for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
-    print(line_dict['id'])
-    for observed_line in line_dict['observed']:
-        print(f'{point_infinite_line_distance(observed_line[0], line_dict["projected"])}, '
-              f'{point_infinite_line_distance(observed_line[1], line_dict["projected"])}')
+    # print(line_dict['id'])
+    # for observed_line in line_dict['observed']:
+    #     print(f'{point_infinite_line_distance(observed_line[0], line_dict["projected"])}, '
+    #           f'{point_infinite_line_distance(observed_line[1], line_dict["projected"])}')
+
+    dtheta_x_0 = ddist_dtheta_x(line_dict['original'], line_dict['observed'][0][0], camera)
+    dtheta_y_0 = ddist_dtheta_y(line_dict['original'], line_dict['observed'][0][0], camera)
+    dtheta_z_0 = ddist_dtheta_z(line_dict['original'], line_dict['observed'][0][0], camera)
+    dfov_0 = ddist_dfov(line_dict['original'], line_dict['observed'][0][0], camera)
+
+    dtheta_x_1 = ddist_dtheta_x(line_dict['original'], line_dict['observed'][0][1], camera)
+    dtheta_y_1 = ddist_dtheta_y(line_dict['original'], line_dict['observed'][0][1], camera)
+    dtheta_z_1 = ddist_dtheta_z(line_dict['original'], line_dict['observed'][0][1], camera)
+    dfov_1 = ddist_dfov(line_dict['original'], line_dict['observed'][0][1], camera)
+
+    A_rows.append(np.array([dtheta_x_0, dtheta_y_0, dtheta_z_0, dfov_0], dtype=np.float32))
+    A_rows.append(np.array([dtheta_x_1, dtheta_y_1, dtheta_z_1, dfov_1], dtype=np.float32))
+    bs.append(-point_infinite_line_distance(line_dict['observed'][0][0], line_dict['projected']))
+    bs.append(-point_infinite_line_distance(line_dict['observed'][0][1], line_dict['projected']))
+
+A = np.array(A_rows, dtype=np.float32)
+b = np.array(bs, dtype=np.float32)
+
+# print(A)
+# print(b)
+
+x, residuals, rank, s = lstsq(A, b, rcond=None)
+# print(x)
+
+camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
+camera = camera.with_new_fov(camera.fov + x[3])
+
+for line_dict in line_dicts:
+    p1 = line_dict['original'][0]
+    p2 = line_dict['original'][1]
+    p1_proj = project(p1, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+    p2_proj = project(p2, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+    line = np.array([p1_proj, p2_proj], dtype=np.int32)
+    cv2.line(frame_image_line_space,
+             (line[0][0], line[0][1]),
+             (line[1][0], line[1][1]), (0, 0, 255), 2)
 
 # plot frame_image
 plt.imshow(frame_image_line_space)
