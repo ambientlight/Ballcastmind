@@ -95,3 +95,8 @@ def buffer_lines(line: ndarray, d: float):
 def line_orientation_is_vertical(line: ndarray) -> bool:
     angle_with_horizon = np.arctan2(line[0][1] - line[1][1], line[1][0] - line[0][0])
     return np.sin(angle_with_horizon) > 0.5
+
+
+def point_infinite_line_distance(point: ndarray, line: ndarray):
+    b, a = linear_parameters(line[0], line[1])
+    return (point[1] - (a + b * point[0])) / sqrt(1 + (b * b))
