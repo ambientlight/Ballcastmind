@@ -1,5 +1,5 @@
 from types import SimpleNamespace as Namespace
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from os.path import isfile
 import json
 import cv2
@@ -13,6 +13,7 @@ from math import sin, cos
 from math import radians
 from time import time
 from numpy.linalg import lstsq
+import random
 
 from reconstruct.core import project, linear_parameters, cut_off_line, buffer_lines, line_orientation_is_vertical, \
     point_infinite_line_distance
@@ -81,12 +82,20 @@ def ddist_dtheta_z(unprojected_line: ndarray, target_point: ndarray, camera: Per
 
 def ddist_dfov(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     h = 1e-6
-    cam1 = camera.with_new_fov(camera.fov + h)
-    cam2 = camera.with_new_fov(camera.fov - h)
+    cam1 = camera.copy(camera.fov + h)
+    cam2 = camera.copy(camera.fov - h)
     return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
 
 
-last_frame_data = read_regular_frame_data()[-1]
+def ddist_dRot(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+    return np.array([
+        ddist_dtheta_x(unprojected_line, target_point, camera),
+        ddist_dtheta_y(unprojected_line, target_point, camera),
+        ddist_dtheta_z(unprojected_line, target_point, camera),
+    ])
+
+
+last_frame_data = random.choice(read_regular_frame_data())
 frame_image_path = f'{sample_dir}/{last_frame_data.imagePath}'
 frame_image = cv2.imread(frame_image_path)
 frame_image = cv2.cvtColor(frame_image, cv2.COLOR_BGR2RGB)
@@ -182,7 +191,8 @@ for line_id in line_ids:
         'orientation': line_orientation_is_vertical(projected)
     })
 
-frame_image_line_space = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
+frame_image_line_space = frame_image
+# frame_image_line_space = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
 # frame_image = cv2.bitwise_and(frame_image, frame_image, mask=line_search_mask)
 
 hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
@@ -205,9 +215,9 @@ lines: List[List[Tuple[int, int, int, int]]] = cv2.HoughLinesP(
 print(f'hough_lines_p: {(time() - hough_start_time) * 1000} ms')
 
 # print(f'Line count: {len(lines)}')
-for line in lines:
-    for x1, y1, x2, y2 in line:
-        cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
+# for line in lines:
+#     for x1, y1, x2, y2 in line:
+#         cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
 for line_dict in line_dicts:
     projected = line_dict['projected']
@@ -240,40 +250,79 @@ for line_dict in line_dicts:
 
 print(f'group_by_buffer: {(time() - group_by_buffer_start_time) * 1000} ms')
 
-A_rows = []
-bs = []
-for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
-    # print(line_dict['id'])
-    # for observed_line in line_dict['observed']:
-    #     print(f'{point_infinite_line_distance(observed_line[0], line_dict["projected"])}, '
-    #           f'{point_infinite_line_distance(observed_line[1], line_dict["projected"])}')
+minimization_start_time = time()
+for iteration in range(16):
 
-    dtheta_x_0 = ddist_dtheta_x(line_dict['original'], line_dict['observed'][0][0], camera)
-    dtheta_y_0 = ddist_dtheta_y(line_dict['original'], line_dict['observed'][0][0], camera)
-    dtheta_z_0 = ddist_dtheta_z(line_dict['original'], line_dict['observed'][0][0], camera)
-    dfov_0 = ddist_dfov(line_dict['original'], line_dict['observed'][0][0], camera)
+    A_rows = []
+    bs = []
 
-    dtheta_x_1 = ddist_dtheta_x(line_dict['original'], line_dict['observed'][0][1], camera)
-    dtheta_y_1 = ddist_dtheta_y(line_dict['original'], line_dict['observed'][0][1], camera)
-    dtheta_z_1 = ddist_dtheta_z(line_dict['original'], line_dict['observed'][0][1], camera)
-    dfov_1 = ddist_dfov(line_dict['original'], line_dict['observed'][0][1], camera)
+    # calculate partial derivatives and distances for the update
+    for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
+        p1_proj = project(line_dict['original'][0], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+        p2_proj = project(line_dict['original'][1], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+        projected = np.array([p1_proj, p2_proj], dtype=np.int32)
 
-    A_rows.append(np.array([dtheta_x_0, dtheta_y_0, dtheta_z_0, dfov_0], dtype=np.float32))
-    A_rows.append(np.array([dtheta_x_1, dtheta_y_1, dtheta_z_1, dfov_1], dtype=np.float32))
-    bs.append(-point_infinite_line_distance(line_dict['observed'][0][0], line_dict['projected']))
-    bs.append(-point_infinite_line_distance(line_dict['observed'][0][1], line_dict['projected']))
+        drot_0 = ddist_dRot(line_dict['original'], line_dict['observed'][0][0], camera)
+        dfov_0 = ddist_dfov(line_dict['original'], line_dict['observed'][0][0], camera)
+        drot_1 = ddist_dRot(line_dict['original'], line_dict['observed'][0][1], camera)
+        dfov_1 = ddist_dfov(line_dict['original'], line_dict['observed'][0][1], camera)
 
-A = np.array(A_rows, dtype=np.float32)
-b = np.array(bs, dtype=np.float32)
+        A_rows.append(np.array([drot_0[0], drot_0[1], drot_0[2], dfov_0], dtype=np.float32))
+        A_rows.append(np.array([drot_1[0], drot_1[1], drot_1[2], dfov_1], dtype=np.float32))
+        bs.append(-point_infinite_line_distance(line_dict['observed'][0][0], projected))
+        bs.append(-point_infinite_line_distance(line_dict['observed'][0][1], projected))
+    A = np.array(A_rows, dtype=np.float64)
+    b = np.array(bs, dtype=np.float64)
 
-# print(A)
-# print(b)
+    error = np.sum(b**2)
+    if iteration == 0:
+        print(f'original error: {error}')
 
-x, residuals, rank, s = lstsq(A, b, rcond=None)
-# print(x)
+    x, residuals, rank, s = lstsq(A, b, rcond=None)
+    # print(f'Iteration {iteration}: update = {x}')
 
-camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
-camera = camera.with_new_fov(camera.fov + x[3])
+    # half the updates if the new error is larger then current
+    error_diff = 1
+    new_error = 0
+    half_count = 0
+    while error_diff > 0:
+        updated_camera = camera.copy(camera.fov + x[3])
+        updated_camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
+
+        # calculate the new error
+        bs_new = []
+        for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
+            p1_proj = project(line_dict['original'][0], updated_camera, last_frame_data.canvasSize.width,
+                              last_frame_data.canvasSize.height)
+            p2_proj = project(line_dict['original'][1], updated_camera, last_frame_data.canvasSize.width,
+                              last_frame_data.canvasSize.height)
+            projected = np.array([p1_proj, p2_proj], dtype=np.int32)
+            bs_new.append(-point_infinite_line_distance(line_dict['observed'][0][0], projected))
+            bs_new.append(-point_infinite_line_distance(line_dict['observed'][0][1], projected))
+        bs_new = np.array(bs_new, dtype=np.float64)
+        new_error = np.sum(bs_new ** 2)
+        error_diff = new_error - error
+        if error_diff > 0:
+            x = x / 2
+            # print(f'Iteration {iteration}({half_count}): new error diff = {error_diff}, updates halfed')
+        else:
+            pass
+            # print(f'Iteration {iteration}({half_count}): new error diff: {error_diff}')
+        half_count += 1
+        if half_count == 16:
+            # print(f'Iteration {iteration}({half_count}): max half updates reached, stopping')
+            break
+
+    # print(f'Iteration {iteration}: target error = {new_error}')
+    camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
+    camera = camera.copy(camera.fov + x[3])
+
+    # update the target camera
+    if error_diff >= 0.0:
+        print(f'optimization compelete after {iteration} iterations: error = {new_error}')
+        break
+
+print(f'minimization: {(time() - minimization_start_time) * 1000} ms')
 
 for line_dict in line_dicts:
     p1 = line_dict['original'][0]

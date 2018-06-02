@@ -78,20 +78,11 @@ class PerspectiveCamera:
 
         self.update_projection_matrix()
 
-    def copy(self):
-        target = PerspectiveCamera(self.fov, self.aspect, self.near, self.far)
-        target._position = self._rotation.copy()
-        target._rotation = self._rotation.copy()
-        target._scale = self._scale.copy()
-
-        target.matrix.value = self.matrix.value.copy()
-        target.projection_matrix.value = self.projection_matrix.value.copy()
-        return target
-
-    def with_new_fov(self, fov: float):
-        target = self.copy()
-        target.fov = fov
-        target.update_projection_matrix()
+    def copy(self, fov: Optional[float] = None):
+        target = PerspectiveCamera(fov if fov is not None else self.fov, self.aspect, self.near, self.far)
+        target.position = self.position.copy()
+        target.rotation = self.rotation.copy()
+        target.scale = self.scale.copy()
         return target
 
     def get_film_width(self):
