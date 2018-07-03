@@ -23,5 +23,5 @@ def line_filter(image: ndarray, line_search_mask: ndarray, grass_mask: ndarray, 
     # turn into a mask
     target_mask = cv2.inRange(target, np.array([1]), np.array([255]))
 
-    print(f'line_filter: {(time() - start_time) * 1000} ms')
+    # print(f'line_filter: {(time() - start_time) * 1000} ms')
     return target_mask

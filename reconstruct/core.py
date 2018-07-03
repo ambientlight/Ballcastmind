@@ -83,12 +83,14 @@ def buffer_lines(line: ndarray, d: float):
 
     y_p1 = m_per * np.array([x3, x4]) + c_per
     y_p2 = m_per * np.array([x5, x6]) + c_per2
-    return np.array([
+    buf_lines = np.array([
         [x3, y_p1[0]],
         [x4, y_p1[1]],
         [x6, y_p2[1]],
         [x5, y_p2[0]]
     ])
+
+    return buf_lines
 
 
 # whether line is closer to vertical orientation

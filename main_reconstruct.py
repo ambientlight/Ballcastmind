@@ -19,6 +19,7 @@ from reconstruct.core import project, linear_parameters, cut_off_line, buffer_li
     point_infinite_line_distance
 from reconstruct.perspective_camera import PerspectiveCamera
 from reconstruct.image_tools import line_filter
+from reconstruct.hough import hough_transform
 
 SEARCH_WINDOW_CORNER_CUTOFF = 20
 METER_TO_YARD_MULT = 1.093613298337708
@@ -33,8 +34,10 @@ sample_id = 'cebd5588-926b-486b-8add-bbe1e74a1226_v2'
 sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
+buffer_lines(np.array([[432, 125], [377, 126]]), 5)
+
 def read_regular_frame_data():
-    frame_data_path = f'{sample_dir}/frame_data.json'
+    frame_data_path = f'{sample_dir}/frame_data_proc.json'
     if not isfile(frame_data_path):
         print("frame_data.json hasn't been found in sample directory")
         exit(1)
@@ -45,63 +48,257 @@ def read_regular_frame_data():
     return [frame_sample for frame_sample in frame_data if frame_sample.type == 'regular']
 
 
-def dist(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+def dist(frame_data: Any, unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     projected_line = np.array([
-        project(unprojected_line[0], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height),
-        project(unprojected_line[1], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+        project(unprojected_line[0], camera, frame_data.canvasSize.width, frame_data.canvasSize.height),
+        project(unprojected_line[1], camera, frame_data.canvasSize.width, frame_data.canvasSize.height)
     ], dtype=np.float64)
     return point_infinite_line_distance(target_point, projected_line)
 
 
-def ddist_dtheta_x(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+def ddist_dtheta_x(frame_data: Any, unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     h = 1e-6
     cam1 = camera.copy()
     cam2 = camera.copy()
     cam1.rotation = np.array([cam1.rotation[0] + h, cam1.rotation[1], cam1.rotation[2]])
     cam2.rotation = np.array([cam1.rotation[0] - h, cam1.rotation[1], cam1.rotation[2]])
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
+    return (dist(frame_data, unprojected_line, target_point, cam1) - dist(frame_data, unprojected_line, target_point, cam2)) / (2 * h)
 
 
-def ddist_dtheta_y(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+def ddist_dtheta_y(frame_data: Any, unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     h = 1e-6
     cam1 = camera.copy()
     cam2 = camera.copy()
     cam1.rotation = np.array([cam1.rotation[0], cam1.rotation[1] + h, cam1.rotation[2]])
     cam2.rotation = np.array([cam1.rotation[0], cam1.rotation[1] - h, cam1.rotation[2]])
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
+    return (dist(frame_data, unprojected_line, target_point, cam1) - dist(frame_data, unprojected_line, target_point, cam2)) / (2 * h)
 
 
-def ddist_dtheta_z(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+def ddist_dtheta_z(frame_data: Any, unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     h = 1e-6
     cam1 = camera.copy()
     cam2 = camera.copy()
     cam1.rotation = np.array([cam1.rotation[0], cam1.rotation[1], cam1.rotation[2] + h])
     cam2.rotation = np.array([cam1.rotation[0], cam1.rotation[1], cam1.rotation[2] - h])
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
+    return (dist(frame_data, unprojected_line, target_point, cam1) - dist(frame_data, unprojected_line, target_point, cam2)) / (2 * h)
 
 
-def ddist_dfov(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+def ddist_dfov(frame_data: Any, unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     h = 1e-6
     cam1 = camera.copy(camera.fov + h)
     cam2 = camera.copy(camera.fov - h)
-    return (dist(unprojected_line, target_point, cam1) - dist(unprojected_line, target_point, cam2)) / (2 * h)
+    return (dist(frame_data, unprojected_line, target_point, cam1) - dist(frame_data, unprojected_line, target_point, cam2)) / (2 * h)
 
 
-def ddist_dRot(unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
+def ddist_dRot(frame_data: Any, unprojected_line: ndarray, target_point: ndarray, camera: PerspectiveCamera):
     return np.array([
-        ddist_dtheta_x(unprojected_line, target_point, camera),
-        ddist_dtheta_y(unprojected_line, target_point, camera),
-        ddist_dtheta_z(unprojected_line, target_point, camera),
+        ddist_dtheta_x(frame_data, unprojected_line, target_point, camera),
+        ddist_dtheta_y(frame_data, unprojected_line, target_point, camera),
+        ddist_dtheta_z(frame_data, unprojected_line, target_point, camera),
     ])
 
 
-last_frame_data = random.choice(read_regular_frame_data())
-frame_image_path = f'{sample_dir}/{last_frame_data.imagePath}'
-frame_image = cv2.imread(frame_image_path)
-frame_image = cv2.cvtColor(frame_image, cv2.COLOR_BGR2RGB)
+def minimizeCamera(frame_data: Any, frame_image: ndarray, line_dict: Dict[str, ndarray]) -> Optional[PerspectiveCamera]:
+    camera = PerspectiveCamera(frame_data.camera.fov,
+                               frame_data.canvasSize.width / frame_data.canvasSize.height, 0.1, 1000)
+    camera.position = np.array([
+        frame_data.camera.position.x,
+        frame_data.camera.position.y,
+        frame_data.camera.position.z])
+    camera.rotation = np.array([
+        radians(frame_data.camera.rotation.x),
+        radians(frame_data.camera.rotation.y),
+        radians(frame_data.camera.rotation.z)])
+
+    overlay = np.empty(frame_image.shape, np.uint8)
+    line_search_mask = np.empty((frame_image.shape[0], frame_image.shape[1]), np.uint8)
+    line_dicts: List[Dict[str, Any]] = []
+    for line_id in line_ids:
+        p1 = np.array([line_dict[line_id][0][0], line_dict[line_id][0][1], 0.], dtype=np.float32)
+        p2 = np.array([line_dict[line_id][1][0], line_dict[line_id][1][1], 0.], dtype=np.float32)
+
+        p1_proj = project(p1, camera, frame_data.canvasSize.width, frame_data.canvasSize.height)
+        p2_proj = project(p2, camera, frame_data.canvasSize.width, frame_data.canvasSize.height)
+
+        projected = np.array([p1_proj, p2_proj], dtype=np.int32)
+        line = cut_off_line(projected, SEARCH_WINDOW_CORNER_CUTOFF)
+        lines = buffer_lines(line, SEARCH_WINDOW_RADIUS).astype(np.int32)
+        reshaped_lines = lines.reshape((-1, 1, 2))
+        cv2.fillPoly(overlay, [reshaped_lines], (0, 0, 255))
+        cv2.fillPoly(line_search_mask, [reshaped_lines], (255, 255, 255))
+
+        line_dicts.append({
+            'original': np.array([p1, p2]),
+            'projected': projected,
+            'reduced_projected': line,
+            'buffer_contour': lines.reshape((-1, 1, 2)),
+            'id': line_id,
+            'orientation': line_orientation_is_vertical(projected)
+        })
+
+    frame_image_line_space = frame_image
+
+    hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
+    grass_mask = cv2.inRange(hsv_frame, LOWER_GRASS_GREEN, UPPER_GRASS_GREEN)
+    grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
+
+    # print(f'proj_fill: {(time() - proj_start_time) * 1000} ms')
+
+    filtered_lines_mask = line_filter(
+        grass_only_frame_image,
+        line_search_mask,
+        grass_mask,
+        15)
+
+    # plt.imshow(filtered_lines_mask)
+    # plt.show()
+
+    # lines = frame_data.detectedLines
+    lines = cv2.HoughLinesP(
+        filtered_lines_mask,
+        rho=1, theta=np.pi / 180, threshold=150, minLineLength=150, maxLineGap=20
+    )
+
+    if lines is None:
+        return None
+
+    lines = [line[0] for line in lines]
+    # for line in lines:
+    #     for x1, y1, x2, y2 in line:
+    #         cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+    for line_dict in line_dicts:
+        projected = line_dict['projected']
+        cv2.line(frame_image_line_space,
+                 (projected[0][0], projected[0][1]),
+                 (projected[1][0], projected[1][1]), (0, 255, 0), 2)
+
+    group_by_buffer_start_time = time()
+    for line_dict in line_dicts:
+        reshaped_lines = line_dict['buffer_contour']
+        match_idxs = []
+        for line_index, line in enumerate(lines):
+            x1 = line[0]
+            y1 = line[1]
+            x2 = line[2]
+            y2 = line[3]
+
+            p1_res = cv2.pointPolygonTest(reshaped_lines, (x1, y1), True)
+            p2_res = cv2.pointPolygonTest(reshaped_lines, (x2, y2), True)
+
+            # print(f'{line_dict["id"]}: {p1_res}, {p2_res}')
+            if (p1_res > -30) and (p2_res > -30):
+                match_idxs.append(line_index)
+
+        line_dict['observed'] = []
+        if len(match_idxs) > 0:
+            line_dict['observed'] = np.array([
+                [[lines[idx][0], lines[idx][1]],
+                 [lines[idx][2], lines[idx][3]]] for idx in match_idxs], dtype=np.int32)
+            # remove extracted lines from the list
+            lines = [line for line_index, line in enumerate(lines) if line_index not in match_idxs]
+
+        # print(f'{line_dict["id"]}: {len(line_dict["extracted"])}')
+
+    # print(f'group_by_buffer: {(time() - group_by_buffer_start_time) * 1000} ms')
+
+    # minimization_start_time = time()
+    for iteration in range(16):
+
+        A_rows = []
+        bs = []
+
+        # calculate partial derivatives and distances for the update
+        for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
+            p1_proj = project(line_dict['original'][0], camera, frame_data.canvasSize.width,
+                              frame_data.canvasSize.height)
+            p2_proj = project(line_dict['original'][1], camera, frame_data.canvasSize.width,
+                              frame_data.canvasSize.height)
+            projected = np.array([p1_proj, p2_proj], dtype=np.int32)
+
+            drot_0 = ddist_dRot(frame_data, line_dict['original'], line_dict['observed'][0][0], camera)
+            dfov_0 = ddist_dfov(frame_data, line_dict['original'], line_dict['observed'][0][0], camera)
+            drot_1 = ddist_dRot(frame_data, line_dict['original'], line_dict['observed'][0][1], camera)
+            dfov_1 = ddist_dfov(frame_data, line_dict['original'], line_dict['observed'][0][1], camera)
+
+            A_rows.append(np.array([drot_0[0], drot_0[1], drot_0[2], dfov_0], dtype=np.float32))
+            A_rows.append(np.array([drot_1[0], drot_1[1], drot_1[2], dfov_1], dtype=np.float32))
+            bs.append(-point_infinite_line_distance(line_dict['observed'][0][0], projected))
+            bs.append(-point_infinite_line_distance(line_dict['observed'][0][1], projected))
+        A = np.array(A_rows, dtype=np.float64)
+        b = np.array(bs, dtype=np.float64)
+
+        error = np.sum(b ** 2)
+        if iteration == 0:
+            print(f'original error: {error}')
+
+        x, residuals, rank, s = lstsq(A, b, rcond=None)
+        # print(f'Iteration {iteration}: update = {x}')
+
+        # half the updates if the new error is larger then current
+        error_diff = 1
+        new_error = 0
+        half_count = 0
+        while error_diff > 0:
+            updated_camera = camera.copy(camera.fov + x[3])
+            updated_camera.rotation = np.array(
+                [camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
+
+            # calculate the new error
+            bs_new = []
+            for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
+                p1_proj = project(line_dict['original'][0], updated_camera, frame_data.canvasSize.width,
+                                  frame_data.canvasSize.height)
+                p2_proj = project(line_dict['original'][1], updated_camera, frame_data.canvasSize.width,
+                                  frame_data.canvasSize.height)
+                projected = np.array([p1_proj, p2_proj], dtype=np.int32)
+                bs_new.append(-point_infinite_line_distance(line_dict['observed'][0][0], projected))
+                bs_new.append(-point_infinite_line_distance(line_dict['observed'][0][1], projected))
+            bs_new = np.array(bs_new, dtype=np.float64)
+            new_error = np.sum(bs_new ** 2)
+            error_diff = new_error - error
+            if error_diff > 0:
+                x = x / 2
+                # print(f'Iteration {iteration}({half_count}): new error diff = {error_diff}, updates halfed')
+            else:
+                pass
+                # print(f'Iteration {iteration}({half_count}): new error diff: {error_diff}')
+            half_count += 1
+            if half_count == 16:
+                # print(f'Iteration {iteration}({half_count}): max half updates reached, stopping')
+                break
+
+        # print(f'Iteration {iteration}: target error = {new_error}')
+        camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
+        camera = camera.copy(camera.fov + x[3])
+
+        # update the target camera
+        if error_diff >= 0.0:
+            print(f'optimization compelete after {iteration} iterations: error = {new_error}')
+            break
+
+    for line_dict in line_dicts:
+        p1 = line_dict['original'][0]
+        p2 = line_dict['original'][1]
+        p1_proj = project(p1, camera, frame_data.canvasSize.width, frame_data.canvasSize.height)
+        p2_proj = project(p2, camera, frame_data.canvasSize.width, frame_data.canvasSize.height)
+        line = np.array([p1_proj, p2_proj], dtype=np.int32)
+        cv2.line(frame_image_line_space,
+                 (line[0][0], line[0][1]),
+                 (line[1][0], line[1][1]), (0, 0, 255), 2)
+
+    # plot frame_image
+    # plt.imshow(frame_image_line_space)
+    # plt.title('Frame Image')
+    # plt.xticks([])
+    # plt.yticks([])
+    # plt.show()
+
+    return camera
+
 
 # no camera roll is assumed, instead let pitch to have incline and minimize for it aswell later
-pitch_tilt = last_frame_data.camera.rotation.z
+# pitch_tilt = last_frame_data.camera.rotation.z
 # print(camera_pose)
 
 line_ids = [
@@ -155,194 +352,39 @@ line_dict = {}
 for index, line_name in enumerate(line_ids):
     line_dict[line_name] = coords[index]
 
-camera = PerspectiveCamera(last_frame_data.camera.fov, last_frame_data.canvasSize.width / last_frame_data.canvasSize.height, 0.1, 1000)
-camera.position = np.array([
-    last_frame_data.camera.position.x,
-    last_frame_data.camera.position.y,
-    last_frame_data.camera.position.z])
-camera.rotation = np.array([
-    radians(last_frame_data.camera.rotation.x),
-    radians(last_frame_data.camera.rotation.y),
-    radians(last_frame_data.camera.rotation.z)])
+frame_data = read_regular_frame_data()
+with open(f'{sample_dir}/frame_data_proc.json', encoding='utf-8') as frame_data_file:
+    frame_data_out = json.load(frame_data_file)
+    frame_data_out = [frame_sample for frame_sample in frame_data_out if frame_sample["type"] == 'regular']
 
-overlay = np.empty(frame_image.shape, np.uint8)
-line_search_mask = np.empty((frame_image.shape[0], frame_image.shape[1]), np.uint8)
-line_dicts: List[Dict[str, Any]] = []
-for line_id in line_ids:
-    p1 = np.array([line_dict[line_id][0][0], line_dict[line_id][0][1], 0.], dtype=np.float32)
-    p2 = np.array([line_dict[line_id][1][0], line_dict[line_id][1][1], 0.], dtype=np.float32)
+for index, frame_data_entry in enumerate(frame_data):
+    frame_image_path = f'{sample_dir}/{frame_data_entry.imagePath}'
+    frame_image = cv2.imread(frame_image_path)
+    frame_image = cv2.cvtColor(frame_image, cv2.COLOR_BGR2RGB)
+    targetCamera: PerspectiveCamera = minimizeCamera(frame_data_entry, frame_image, line_dict)
+    if targetCamera is not None:
+        # camera.position = np.array([
+        #     frame_data.camera.position.x,
+        #     frame_data.camera.position.y,
+        #     frame_data.camera.position.z])
+        # camera.rotation = np.array([
+        #     radians(frame_data.camera.rotation.x),
+        #     radians(frame_data.camera.rotation.y),
+        #     radians(frame_data.camera.rotation.z)])
 
-    p1_proj = project(p1, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
-    p2_proj = project(p2, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
+        frame_data_out[index]["minimized_camera"] = {
+            "position": {
+                "x": targetCamera.position[0],
+                "y": targetCamera.position[1],
+                "z": targetCamera.position[2]
+            },
+            "rotation": {
+                "x": targetCamera.rotation[0],
+                "y": targetCamera.rotation[1],
+                "z": targetCamera.rotation[2]
+            },
+            "fov": targetCamera.fov,
+        }
 
-    projected = np.array([p1_proj, p2_proj], dtype=np.int32)
-    line = cut_off_line(projected, SEARCH_WINDOW_CORNER_CUTOFF)
-    lines = buffer_lines(line, SEARCH_WINDOW_RADIUS).astype(np.int32)
-    reshaped_lines = lines.reshape((-1, 1, 2))
-    cv2.fillPoly(overlay, [reshaped_lines], (0, 0, 255))
-    cv2.fillPoly(line_search_mask, [reshaped_lines], (255, 255, 255))
-
-    line_dicts.append({
-        'original': np.array([p1, p2]),
-        'projected': projected,
-        'reduced_projected': line,
-        'buffer_contour': lines.reshape((-1, 1, 2)),
-        'id': line_id,
-        'orientation': line_orientation_is_vertical(projected)
-    })
-
-frame_image_line_space = frame_image
-# frame_image_line_space = cv2.addWeighted(frame_image, 0.9, overlay, 0.1, 0)
-# frame_image = cv2.bitwise_and(frame_image, frame_image, mask=line_search_mask)
-
-hsv_frame = cv2.cvtColor(frame_image.copy(), cv2.COLOR_BGR2HSV)
-grass_mask = cv2.inRange(hsv_frame, LOWER_GRASS_GREEN, UPPER_GRASS_GREEN)
-grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
-
-print(f'proj_fill: {(time() - proj_start_time) * 1000} ms')
-
-filtered_lines_mask = line_filter(
-    grass_only_frame_image,
-    line_search_mask,
-    grass_mask,
-    15)
-
-hough_start_time = time()
-lines: List[List[Tuple[int, int, int, int]]] = cv2.HoughLinesP(
-    filtered_lines_mask,
-    rho=1, theta=np.pi/180, threshold=150, minLineLength=150, maxLineGap=20
-)
-print(f'hough_lines_p: {(time() - hough_start_time) * 1000} ms')
-
-# print(f'Line count: {len(lines)}')
-# for line in lines:
-#     for x1, y1, x2, y2 in line:
-#         cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
-
-for line_dict in line_dicts:
-    projected = line_dict['projected']
-    cv2.line(frame_image_line_space,
-             (projected[0][0], projected[0][1]),
-             (projected[1][0], projected[1][1]), (0, 255, 0), 2)
-
-group_by_buffer_start_time = time()
-for line_dict in line_dicts:
-    reshaped_lines = line_dict['buffer_contour']
-    match_idxs = []
-    for line_index, line in enumerate(lines):
-        x1, y1, x2, y2 = line[0]
-        p1_res = cv2.pointPolygonTest(reshaped_lines, (x1, y1), True)
-        p2_res = cv2.pointPolygonTest(reshaped_lines, (x2, y2), True)
-
-        # print(f'{line_dict["id"]}: {p1_res}, {p2_res}')
-        if (p1_res > -30) and (p2_res > -30):
-            match_idxs.append(line_index)
-
-    line_dict['observed'] = []
-    if len(match_idxs) > 0:
-        line_dict['observed'] = np.array([
-            [[lines[idx][0][0], lines[idx][0][1]],
-             [lines[idx][0][2], lines[idx][0][3]]] for idx in match_idxs], dtype=np.int32)
-        # remove extracted lines from the list
-        lines = [line for line_index, line in enumerate(lines) if line_index not in match_idxs]
-
-    # print(f'{line_dict["id"]}: {len(line_dict["extracted"])}')
-
-print(f'group_by_buffer: {(time() - group_by_buffer_start_time) * 1000} ms')
-
-minimization_start_time = time()
-for iteration in range(16):
-
-    A_rows = []
-    bs = []
-
-    # calculate partial derivatives and distances for the update
-    for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
-        p1_proj = project(line_dict['original'][0], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
-        p2_proj = project(line_dict['original'][1], camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
-        projected = np.array([p1_proj, p2_proj], dtype=np.int32)
-
-        drot_0 = ddist_dRot(line_dict['original'], line_dict['observed'][0][0], camera)
-        dfov_0 = ddist_dfov(line_dict['original'], line_dict['observed'][0][0], camera)
-        drot_1 = ddist_dRot(line_dict['original'], line_dict['observed'][0][1], camera)
-        dfov_1 = ddist_dfov(line_dict['original'], line_dict['observed'][0][1], camera)
-
-        A_rows.append(np.array([drot_0[0], drot_0[1], drot_0[2], dfov_0], dtype=np.float32))
-        A_rows.append(np.array([drot_1[0], drot_1[1], drot_1[2], dfov_1], dtype=np.float32))
-        bs.append(-point_infinite_line_distance(line_dict['observed'][0][0], projected))
-        bs.append(-point_infinite_line_distance(line_dict['observed'][0][1], projected))
-    A = np.array(A_rows, dtype=np.float64)
-    b = np.array(bs, dtype=np.float64)
-
-    error = np.sum(b**2)
-    if iteration == 0:
-        print(f'original error: {error}')
-
-    x, residuals, rank, s = lstsq(A, b, rcond=None)
-    # print(f'Iteration {iteration}: update = {x}')
-
-    # half the updates if the new error is larger then current
-    error_diff = 1
-    new_error = 0
-    half_count = 0
-    while error_diff > 0:
-        updated_camera = camera.copy(camera.fov + x[3])
-        updated_camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
-
-        # calculate the new error
-        bs_new = []
-        for line_dict in [line_dict for line_dict in line_dicts if len(line_dict['observed']) > 0]:
-            p1_proj = project(line_dict['original'][0], updated_camera, last_frame_data.canvasSize.width,
-                              last_frame_data.canvasSize.height)
-            p2_proj = project(line_dict['original'][1], updated_camera, last_frame_data.canvasSize.width,
-                              last_frame_data.canvasSize.height)
-            projected = np.array([p1_proj, p2_proj], dtype=np.int32)
-            bs_new.append(-point_infinite_line_distance(line_dict['observed'][0][0], projected))
-            bs_new.append(-point_infinite_line_distance(line_dict['observed'][0][1], projected))
-        bs_new = np.array(bs_new, dtype=np.float64)
-        new_error = np.sum(bs_new ** 2)
-        error_diff = new_error - error
-        if error_diff > 0:
-            x = x / 2
-            # print(f'Iteration {iteration}({half_count}): new error diff = {error_diff}, updates halfed')
-        else:
-            pass
-            # print(f'Iteration {iteration}({half_count}): new error diff: {error_diff}')
-        half_count += 1
-        if half_count == 16:
-            # print(f'Iteration {iteration}({half_count}): max half updates reached, stopping')
-            break
-
-    # print(f'Iteration {iteration}: target error = {new_error}')
-    camera.rotation = np.array([camera.rotation[0] + x[0], camera.rotation[1] + x[1], camera.rotation[2] + x[2]])
-    camera = camera.copy(camera.fov + x[3])
-
-    # update the target camera
-    if error_diff >= 0.0:
-        print(f'optimization compelete after {iteration} iterations: error = {new_error}')
-        break
-
-print(f'minimization: {(time() - minimization_start_time) * 1000} ms')
-
-for line_dict in line_dicts:
-    p1 = line_dict['original'][0]
-    p2 = line_dict['original'][1]
-    p1_proj = project(p1, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
-    p2_proj = project(p2, camera, last_frame_data.canvasSize.width, last_frame_data.canvasSize.height)
-    line = np.array([p1_proj, p2_proj], dtype=np.int32)
-    cv2.line(frame_image_line_space,
-             (line[0][0], line[0][1]),
-             (line[1][0], line[1][1]), (0, 0, 255), 2)
-
-# plot frame_image
-plt.imshow(frame_image_line_space)
-plt.title('Frame Image')
-plt.xticks([])
-plt.yticks([])
-plt.show()
-
-# ax1 = fig.add_subplot(2,1,1)
-# ax1.imshow(target)
-# ax2 = fig.add_subplot(2,1,2)
-# ax2.imshow(frame_image)
-# plt.show()
+with open(f'{sample_dir}/frame_data_minimized.json', 'w') as json_file:
+    print(json.dumps(frame_data_out), file=json_file)
