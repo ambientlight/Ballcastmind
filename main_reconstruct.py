@@ -10,7 +10,7 @@ import re
 import numpy as np
 from numpy import ndarray
 from math import sin, cos
-from math import radians
+from math import radians, sqrt, fabs
 from time import time
 from numpy.linalg import lstsq
 import random
@@ -143,35 +143,52 @@ def minimizeCamera(frame_data: Any, frame_image: ndarray, line_dict: Dict[str, n
     grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
 
     # print(f'proj_fill: {(time() - proj_start_time) * 1000} ms')
+    usesLSD = False
+    usesDetected = False
 
-    filtered_lines_mask = line_filter(
-        grass_only_frame_image,
-        line_search_mask,
-        grass_mask,
-        15)
+    if usesDetected:
+        lines = frame_data.detectedLines
+        lines = [(x1, y1, x2, y2) for x1, y1, x2, y2 in lines if fabs(linear_parameters(
+            np.array([x1, y1], dtype=np.int32),
+            np.array([x2, y2], dtype=np.int32))[0]) > 1e-5]
+    elif usesLSD:
+        grayscale = cv2.cvtColor(grass_only_frame_image, cv2.COLOR_BGR2GRAY)
+        detector = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD)
+        lines = detector.detect(grayscale)[0]
+        if lines is not None:
+            # removes short lines
+            lines = [
+                (l[0][0], l[0][1],
+                 l[0][2], l[0][3]) for l in lines if sqrt((l[0][2] - l[0][0])*(l[0][2] - l[0][0]) + (l[0][3] - l[0][1])*(l[0][3] - l[0][1])) > 30]
+            # removes strictly 0 degree slope lines
+            lines = [(x1, y1, x2, y2) for x1, y1, x2, y2 in lines if fabs(linear_parameters(
+                    np.array([x1, y1], dtype=np.int32),
+                    np.array([x2, y2], dtype=np.int32))[0]) > 1e-5]
 
-    # plt.imshow(filtered_lines_mask)
-    # plt.show()
-
-    # lines = frame_data.detectedLines
-    lines = cv2.HoughLinesP(
-        filtered_lines_mask,
-        rho=1, theta=np.pi / 180, threshold=150, minLineLength=150, maxLineGap=20
-    )
+    else:
+        filtered_lines_mask = line_filter(
+            grass_only_frame_image,
+            line_search_mask,
+            grass_mask,
+            15)
+        lines = cv2.HoughLinesP(
+            filtered_lines_mask,
+            rho=1, theta=np.pi / 180, threshold=150, minLineLength=150, maxLineGap=20
+        )
+        if lines is not None:
+            lines = [line[0] for line in lines]
 
     if lines is None:
         return None
 
-    lines = [line[0] for line in lines]
-    # for line in lines:
-    #     for x1, y1, x2, y2 in line:
-    #         cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
+    for x1, y1, x2, y2 in lines:
+        cv2.line(frame_image_line_space, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
     for line_dict in line_dicts:
         projected = line_dict['projected']
         cv2.line(frame_image_line_space,
                  (projected[0][0], projected[0][1]),
-                 (projected[1][0], projected[1][1]), (0, 255, 0), 2)
+                 (projected[1][0], projected[1][1]), (255, 255, 0), 2)
 
     group_by_buffer_start_time = time()
     for line_dict in line_dicts:
@@ -363,15 +380,6 @@ for index, frame_data_entry in enumerate(frame_data):
     frame_image = cv2.cvtColor(frame_image, cv2.COLOR_BGR2RGB)
     targetCamera: PerspectiveCamera = minimizeCamera(frame_data_entry, frame_image, line_dict)
     if targetCamera is not None:
-        # camera.position = np.array([
-        #     frame_data.camera.position.x,
-        #     frame_data.camera.position.y,
-        #     frame_data.camera.position.z])
-        # camera.rotation = np.array([
-        #     radians(frame_data.camera.rotation.x),
-        #     radians(frame_data.camera.rotation.y),
-        #     radians(frame_data.camera.rotation.z)])
-
         frame_data_out[index]["minimized_camera"] = {
             "position": {
                 "x": targetCamera.position[0],
