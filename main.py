@@ -1,6 +1,11 @@
-from models.seperableconv2d4x_dense_head4 import SeperableConv2d4xDenseHead4
+from models.line_features_tests import LineFeaturesTests
 # from keras.utils import plot_model
 
-model = SeperableConv2d4xDenseHead4(name='SeperableConv2d4x_Dense_Head4', model_dir_path='./data/output')
-model.create_model().summary()
-model.train_validate(epoch=100)
+model = LineFeaturesTests(name='LineFeaturesTests', model_dir_path='./data/output')
+
+shouldOptimize = False
+if shouldOptimize:
+    model.train_validate(epoch=200, from_scratch=True)
+else:
+    res = model.optimize(max_evals=1024, epoch=100)
+    print(res)

@@ -10,7 +10,7 @@ import re
 import numpy as np
 from numpy import ndarray
 from math import sin, cos
-from math import radians, sqrt, fabs
+from math import radians, sqrt, fabs, degrees
 from time import time
 from numpy.linalg import lstsq
 import random
@@ -143,15 +143,15 @@ def minimizeCamera(frame_data: Any, frame_image: ndarray, line_dict: Dict[str, n
     grass_only_frame_image = cv2.bitwise_and(frame_image, frame_image, mask=grass_mask)
 
     # print(f'proj_fill: {(time() - proj_start_time) * 1000} ms')
-    usesLSD = False
-    usesDetected = False
+    uses_lsd = False
+    uses_detected = False
 
-    if usesDetected:
+    if uses_detected:
         lines = frame_data.detectedLines
         lines = [(x1, y1, x2, y2) for x1, y1, x2, y2 in lines if fabs(linear_parameters(
             np.array([x1, y1], dtype=np.int32),
             np.array([x2, y2], dtype=np.int32))[0]) > 1e-5]
-    elif usesLSD:
+    elif uses_lsd:
         grayscale = cv2.cvtColor(grass_only_frame_image, cv2.COLOR_BGR2GRAY)
         detector = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD)
         lines = detector.detect(grayscale)[0]
@@ -159,7 +159,7 @@ def minimizeCamera(frame_data: Any, frame_image: ndarray, line_dict: Dict[str, n
             # removes short lines
             lines = [
                 (l[0][0], l[0][1],
-                 l[0][2], l[0][3]) for l in lines if sqrt((l[0][2] - l[0][0])*(l[0][2] - l[0][0]) + (l[0][3] - l[0][1])*(l[0][3] - l[0][1])) > 30]
+                 l[0][2], l[0][3]) for l in lines if sqrt((l[0][2] - l[0][0])*(l[0][2] - l[0][0]) + (l[0][3] - l[0][1])*(l[0][3] - l[0][1])) > 50]
             # removes strictly 0 degree slope lines
             lines = [(x1, y1, x2, y2) for x1, y1, x2, y2 in lines if fabs(linear_parameters(
                     np.array([x1, y1], dtype=np.int32),
@@ -178,7 +178,7 @@ def minimizeCamera(frame_data: Any, frame_image: ndarray, line_dict: Dict[str, n
         if lines is not None:
             lines = [line[0] for line in lines]
 
-    if lines is None:
+    if lines is None or len(lines) == 0:
         return None
 
     for x1, y1, x2, y2 in lines:
@@ -382,14 +382,14 @@ for index, frame_data_entry in enumerate(frame_data):
     if targetCamera is not None:
         frame_data_out[index]["minimized_camera"] = {
             "position": {
-                "x": targetCamera.position[0],
-                "y": targetCamera.position[1],
-                "z": targetCamera.position[2]
+                "x": degrees(targetCamera.position[0]),
+                "y": degrees(targetCamera.position[1]),
+                "z": degrees(targetCamera.position[2])
             },
             "rotation": {
-                "x": targetCamera.rotation[0],
-                "y": targetCamera.rotation[1],
-                "z": targetCamera.rotation[2]
+                "x": degrees(targetCamera.rotation[0]),
+                "y": degrees(targetCamera.rotation[1]),
+                "z": degrees(targetCamera.rotation[2])
             },
             "fov": targetCamera.fov,
         }
