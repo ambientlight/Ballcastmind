@@ -29,33 +29,11 @@ class LineFeaturesTests(ModelDescriptor):
             print('Using hyperopt space:')
             print(space)
 
-        rec_history = space['REC_HISTORY'] if space and space['REC_HISTORY'] else 10
-        dense_units = space['DENSE_SIZE'] if space and space['DENSE_SIZE'] else 2048
-        dropout_size = space['DROPOUT'] if space and space['DROPOUT'] else 0.25
-        last_dense = space['LAST_DENSE'] if space and space['LAST_DENSE'] else 1
-
-        line_input = Input(shape=(32, 4), dtype='float32')
-        if space and space['REC_TYPE'] != 'NONE':
-            x = layers.GRU(rec_history)(line_input) if space and space['REC_TYPE'] == 'GRU' else layers.LSTM(rec_history)(line_input)
-            x = layers.Dense(dense_units, activation='relu')(x)
-        else:
-            x = layers.Dense(dense_units, activation='relu')(line_input)
-
-        if space and space['REC_TYPE'] == 'NONE':
-            x = layers.Flatten()(x)
-
-        x = layers.Dropout(dropout_size)(x)
-
-        if last_dense == 1:
-            rot_x_pred = layers.Dense(last_dense, name='rot_x')(x)
-        else:
-            x = layers.Dense(last_dense, name='rot_x_pre')(x)
-            rot_x_pred = layers.Dense(1, name='rot_x')(x)
-
-        # rot_y_pred = layers.Dense(1, name='rot_y')(x)
-        # rot_z_pred = layers.Dense(1, name='rot_z')(x)
-        # fov_pred = layers.Dense(1, name='fov')(x)
-
+        line_input = Input(shape=(64, 4), dtype='float32')
+        x = layers.Dense(512, activation='relu')(line_input)
+        x = layers.Dropout(0.5)(x)
+        x = layers.Flatten()(x)
+        rot_x_pred = layers.Dense(1, name='rot_x')(x)
         model = Model(line_input, rot_x_pred)
         model.compile(optimizer='adam',
                       loss='mse')
@@ -101,11 +79,11 @@ class LineFeaturesTests(ModelDescriptor):
 
     @staticmethod
     def load_lines(frame_sample):
-        reduced_lines: List[[int, int, int, int]] = frame_sample.reducedLines
-        if len(reduced_lines) > 32:
-            reduced_lines = frame_sample.reducedLines[:32]
+        reduced_lines: List[[int, int, int, int]] = frame_sample.detectedLines
+        if len(reduced_lines) > 64:
+            reduced_lines = frame_sample.detectedLines[:64]
         else:
-            for i in range(len(reduced_lines), 32):
+            for i in range(len(reduced_lines), 64):
                 reduced_lines.append([0, 0, 0, 0])
 
         target_lines = []

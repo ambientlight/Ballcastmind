@@ -21,7 +21,7 @@ sample_dir = f'{data_directory_path}/input/{sample_name}_{sample_id}'
 
 
 class SeperableConv2d4xDenseHead1(ModelDescriptor):
-    _version = 5
+    _version = 7
     _miniBatchSize = 32
 
     def __init__(self, name: str, model_dir_path: str):
@@ -34,7 +34,7 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
 
         # for_optimization = True if space else False
 
-        img_input = Input(shape=(1384, 865, 3), dtype='float32')
+        img_input = Input(shape=(1384, 865, 1), dtype='float32')
         x = layers.SeparableConv2D(256, 20, strides=(10, 10), activation='relu')(img_input)
         x = layers.SeparableConv2D(512, 7, strides=(2, 2), activation='relu')(x)
         x = layers.SeparableConv2D(1024, 7, strides=(2, 2), activation='relu')(x)
@@ -53,7 +53,7 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
         return {}
 
     def data_locators(self, skip_filter: bool = False) -> List[Any]:
-        frame_data_path = f'{sample_dir}/frame_data.json'
+        frame_data_path = f'{sample_dir}/frame_data_minimized.json'
         if not isfile(frame_data_path):
             print("frame_data.json hasn't been found in sample directory")
             exit(1)
@@ -81,15 +81,16 @@ class SeperableConv2d4xDenseHead1(ModelDescriptor):
                 batch_frame_samples = target_samples[read_count: read_count + batch_size]
                 xs = numpy.array([self.frame_sample_load_image(frame_sample, target_size)
                                   for frame_sample in batch_frame_samples])
-                fovs = numpy.array([frame_sample.camera.fov for frame_sample
-                                      in batch_frame_samples])
+                rot_xs = numpy.array([frame_sample.minimized_camera.rotation.x if hasattr(frame_sample, 'minimized_camera') else frame_sample.camera.rotation.x
+                                      for frame_sample in batch_frame_samples])
+
                 read_count += batch_size
-                yield (xs, fovs)
+                yield (xs, rot_xs)
 
     @staticmethod
     def frame_sample_load_image(frame_sample, target_size):
-        frame_image_path = f'{sample_dir}/{frame_sample.imagePath}'
-        return img_to_array(load_img(frame_image_path, target_size=target_size)) / 255.0
+        frame_image_path = f'{sample_dir}/{frame_sample.maskImagePath}'
+        return img_to_array(load_img(frame_image_path, target_size=target_size, grayscale=True)) / 255.0
 
     '''
         normalize to -180 to 180 (0 to 1)
